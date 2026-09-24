@@ -47,7 +47,10 @@ button { cursor: pointer; }
 .num, dd, b { font-variant-numeric: tabular-nums; }
 
 /* ---------- 배경 ---------- */
-#map { position: fixed; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; z-index: 0; }
+/* 지구본은 세 겹: 별 하늘(sky) → 위성 사진 지구(earth, WebGL) → 항로·칩·비행기(map) */
+#sky, #earth, #map { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
+#sky, #earth { pointer-events: none; z-index: 0; }
+#map { touch-action: none; z-index: 0; }
 .scrim {
   position: fixed; inset: 0; z-index: 1; background: #E7E7EA;
   opacity: 0; pointer-events: none; transition: opacity 900ms var(--ease);
@@ -137,6 +140,10 @@ body[data-step="log"] .dock { left: 8px; right: 8px; top: calc(84px + env(safe-a
 }
 
 /* ---------- 공통 버튼·칩 ---------- */
+button, .chip, .tbtn, .dest, .subject, .pill-btn, .od-time, .ychip {
+  transition: background-color 260ms var(--ease), color 260ms var(--ease), box-shadow 260ms var(--ease), transform 200ms var(--ease), opacity 260ms var(--ease);
+}
+button:active { transform: scale(0.97); }
 .btn-black, .btn-gray {
   border: 0; border-radius: 999px; padding: 16px 22px; font-weight: 700; font-size: 16px;
   transition: transform 140ms var(--ease), filter 140ms;
@@ -194,11 +201,11 @@ body[data-step="log"] .dock { left: 8px; right: 8px; top: calc(84px + env(safe-a
 
 /* 룰렛(드럼) 휠: 스크롤해서 가운데 칸을 고름 */
 .wheel-drawer { max-height: 0; overflow: hidden; transition: max-height 380ms var(--ease), opacity 280ms var(--ease); opacity: 0; flex: none; }
-.wheel-drawer.open { max-height: 280px; opacity: 1; }
-.wheel { position: relative; height: 220px; border-radius: 22px; background: var(--gray-2); overflow: hidden; outline-offset: -3px; }
+.wheel-drawer.open { max-height: 360px; opacity: 1; }
+.wheel { position: relative; height: 308px; border-radius: 22px; background: var(--gray-2); overflow: hidden; outline-offset: -3px; }
 .wheel-band { position: absolute; left: 8px; right: 8px; top: 50%; height: 44px; transform: translateY(-50%); border-radius: 999px; background: var(--white); box-shadow: inset 0 0 0 2.5px var(--ink); pointer-events: none; }
 .wheel-list {
-  position: relative; height: 100%; margin: 0; padding: 88px 0; list-style: none;
+  position: relative; height: 100%; margin: 0; padding: 132px 0; list-style: none;
   overflow-y: scroll; scroll-snap-type: y mandatory; overscroll-behavior: contain;
   scrollbar-width: none; -webkit-mask: linear-gradient(transparent, #000 30%, #000 70%, transparent); mask: linear-gradient(transparent, #000 30%, #000 70%, transparent);
 }
@@ -234,9 +241,28 @@ body[data-step="log"] .dock { left: 8px; right: 8px; top: calc(84px + env(safe-a
 .pill-btn[aria-expanded="true"] { background: var(--white); box-shadow: inset 0 0 0 2px var(--ink); }
 .pill-btn span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #wd-ac { display: grid; gap: 6px; }
-.seg { display: grid; grid-template-columns: 1fr 1fr; padding: 4px; border-radius: 999px; background: var(--gray); }
-.seg button { border: 0; background: transparent; border-radius: 999px; padding: 6px 8px; font-size: 13px; color: var(--muted); white-space: nowrap; }
-.seg button[aria-pressed="true"] { background: var(--white); color: var(--ink); box-shadow: 0 1px 4px rgba(0, 0, 0, 0.12); }
+.seg { position: relative; display: grid; grid-template-columns: 1fr 1fr; padding: 4px; border-radius: 999px; background: var(--gray); transition: opacity 250ms var(--ease); }
+.seg-thumb { position: absolute; top: 4px; bottom: 4px; left: 4px; width: calc(50% - 4px); border-radius: 999px; background: var(--white); box-shadow: 0 1px 4px rgba(0, 0, 0, 0.12); transition: transform 380ms cubic-bezier(.3, 1.3, .5, 1); }
+.seg[data-mode="mine"] .seg-thumb { transform: translateX(100%); }
+.seg button { position: relative; z-index: 1; border: 0; background: transparent; border-radius: 999px; padding: 6px 8px; font-size: 13px; color: var(--muted); white-space: nowrap; transition: color 250ms var(--ease); }
+.seg button[aria-pressed="true"] { color: var(--ink); }
+.seg.is-off { opacity: 0.35; pointer-events: none; }
+
+/* 도착지 목록을 넓게: 위쪽 설정 접기 */
+.route-top { display: flex; flex-direction: column; gap: 16px; max-height: 1000px; overflow: hidden; flex: none; transition: max-height 480ms var(--ease), opacity 320ms var(--ease), margin 480ms var(--ease); }
+.route-mini {
+  display: flex; align-items: center; gap: 8px; width: 100%; border: 0; border-radius: 18px; background: var(--gray-2);
+  padding: 0 14px; max-height: 0; opacity: 0; overflow: hidden; flex: none; text-align: left;
+  transition: max-height 480ms var(--ease), opacity 320ms var(--ease), padding 480ms var(--ease);
+}
+.mini-arrow { font-weight: 700; color: var(--muted); }
+.mini-meta { margin-left: auto; font-size: 13px; font-weight: 700; color: var(--muted); white-space: nowrap; }
+.pane-route.compact .route-top { max-height: 0; opacity: 0; margin-top: -16px; }
+.pane-route.compact .route-mini { max-height: 64px; opacity: 1; padding: 10px 14px; }
+.pane-route.compact .pane-head { display: none; }
+.grabber { flex: none; display: grid; place-items: center; height: 22px; margin: -8px 0; border: 0; background: transparent; cursor: ns-resize; touch-action: none; }
+.grabber span { width: 46px; height: 5px; border-radius: 3px; background: #C6C6CD; transition: background 200ms, width 200ms var(--ease); }
+.grabber:hover span, .grabber.dragging span { background: var(--ink); width: 60px; }
 
 /* 도착지: 한 줄에 하나씩, 시간 차이로 묶음 */
 .dest-list { flex: 1 1 auto; min-height: 140px; overflow-y: auto; display: grid; gap: 6px; align-content: start; margin-inline: -6px; padding: 2px 6px; }
@@ -310,16 +336,12 @@ body[data-step="log"] .dock { left: 8px; right: 8px; top: calc(84px + env(safe-a
 }
 .perf-cut { position: absolute; top: calc(50% - 1.5px); height: 3px; left: 0; width: 0; background: var(--ink); border-radius: 2px; z-index: 1; }
 /* 찢은 뒤: 절취선이 톱니 모양 끝단이 되고, 아래 빈 공간은 접힘 */
-.perf.torn { height: 12px; cursor: default; }
+.perf.torn { height: 17px; cursor: default; }
 .perf.torn::before, .perf.torn::after, .perf.torn .perf-cut { display: none; }
-.perf.torn {
-  background: var(--gray-2);
-  -webkit-mask: conic-gradient(from -45deg at bottom, #000 90deg, #0000 0) 0 0 / 14px 100%;
-          mask: conic-gradient(from -45deg at bottom, #000 90deg, #0000 0) 0 0 / 14px 100%;
-}
 .pane-pass:has(.perf.torn) { padding-bottom: 0; }
-.stub { position: relative; display: grid; justify-items: center; gap: 6px; padding: 8px 12px 22px; margin-inline: -22px; background: var(--gray-2); cursor: grab; touch-action: none; user-select: none; overflow: hidden; transition: height 520ms var(--ease) 180ms, padding 520ms var(--ease) 180ms; }
-.stub.gone { padding-block: 0; }
+.dock.cut { border-bottom-left-radius: 0; border-bottom-right-radius: 0; }
+.stub { position: relative; display: grid; justify-items: center; gap: 6px; padding: 8px 12px 22px; margin-inline: -22px; background: var(--gray-2); cursor: grab; touch-action: none; user-select: none; overflow: hidden; }
+.stub.gone { height: 0; padding-block: 0; visibility: hidden; }
 .barcode { display: flex; align-items: stretch; gap: 3px; height: 66px; flex: none; }
 .barcode span { background: var(--ink); flex: none; border-radius: 1px; }
 .stub-hint { font-size: 12px; color: var(--muted); text-align: center; }
@@ -344,7 +366,8 @@ body:not([data-step="pass"]) .side-action { opacity: 0; transform: translateY(16
 }
 body:not([data-step="flight"]) .phases { opacity: 0; transform: translateY(-16px); pointer-events: none; visibility: hidden; }
 .phase { display: grid; gap: 4px; font-size: 11px; color: var(--muted); text-align: center; }
-.phase::before { content: ""; height: 5px; border-radius: 3px; background: var(--gray); }
+.phase { transition: color 500ms var(--ease); }
+.phase::before { content: ""; height: 5px; border-radius: 3px; background: var(--gray); transition: background-color 700ms var(--ease); }
 .phase b { font-size: 13px; font-weight: 700; color: inherit; }
 .phase.is-done { color: var(--ink); }
 .phase.is-done::before { background: var(--ink); }
@@ -474,8 +497,8 @@ body:not([data-step="flight"]) .phases { opacity: 0; transform: translateY(-16px
   .pane { padding: 16px 18px; gap: 10px; }
   .pane-head h2 { font-size: 20px; }
   .hm-field b { font-size: 30px; }
-  .wheel { height: 176px; }
-  .wheel-list { padding: 66px 0; }
+  .wheel { height: 220px; }
+  .wheel-list { padding: 88px 0; }
   .btn-black, .btn-gray { padding: 12px 18px; }
   body[data-step="time"] .dock, body[data-step="route"] .dock, body[data-step="arrive"] .dock { top: 12px; bottom: 12px; right: 12px; }
   body[data-step="flight"] .dock { left: 12px; bottom: 12px; max-height: calc(100% - 100px); }

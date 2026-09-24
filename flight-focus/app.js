@@ -193,11 +193,13 @@
   if (flight && (!AP[flight.from] || !AP[flight.to] || !(flight.endAt > flight.startAt) || !ACMAP[flight.aircraft])) {
     flight = null; store.del('flight');
   }
-  const prefs = Object.assign({ minutes: 60, subject: '공부', custom: '', aircraft: 'A220', voice: false }, store.get('prefs', {}));
+  const prefs = Object.assign({ minutes: 60, subject: '공부', custom: '', aircraft: 'A220', voice: true }, store.get('prefs', {}));
+  if (!prefs.voiceV2) { prefs.voice = true; prefs.voiceV2 = true; } // 새 방송 음성은 기본으로 켬
   if (!SUBJECTS.some((s) => s.n === prefs.subject)) prefs.subject = '공부';
   const savePrefs = () => store.set('prefs', prefs);
 
   let depCode = loc;
+  let homeSel = loc; // 처음 화면에서 고른(노란) 공항
   const sel = { to: null, mode: 'real' };
   let selKey = '';
   let pending = null;
@@ -208,10 +210,12 @@
   const unlocked = (miles) => AIRCRAFT.filter((a) => a.miles <= miles);
   const subjectName = () => (prefs.subject === '기타' ? (prefs.custom.trim() || '기타') : prefs.subject);
 
-  // ---------- 지도 엔진: 우주 배경 + 지구본 ----------
+  // ---------- 지도 엔진: 별 하늘 + 위성 사진 지구(WebGL) + 항로·칩·비행기 ----------
   // view.r = 단계별 지구본 기본 반지름, view.zoom = 확대 배율 (1이면 지구 전체가 보임)
   const cv = $('map');
   const ctx = cv.getContext('2d');
+  const skyCv = $('sky');
+  const sky = skyCv.getContext('2d');
   const COL = {
     space: '#0A1120', ocean: '#86CEF6', land: '#D3E9C3', landEdge: '#B4D39F',
     grat: 'rgba(255,255,255,0.3)', ink: '#141414', yellow: '#FFD43B', white: '#FFFFFF',
@@ -222,17 +226,109 @@
   const gpath = HAS_GEO ? d3.geoPath(proj, ctx) : null;
   const GRAT = HAS_GEO ? d3.geoGraticule10() : null;
   const SPHERE = { type: 'Sphere' };
-  const STARS = (() => { const r = rng(42); return Array.from({ length: 200 }, () => ({ x: r(), y: r(), s: r() < 0.9 ? 1 : 2, a: 0.2 + r() * 0.6 })); })();
+  const W50 = window.WORLD50 || null;
+  const STARS = (() => { const r = rng(42); return Array.from({ length: 220 }, () => ({ x: r(), y: r(), s: r() < 0.9 ? 1 : 2, a: 0.2 + r() * 0.6 })); })();
   let W = 1, H = 1, DPR = 1;
   const view = { cx: 0, cy: 0, r: 100, lon: 127, lat: 37, zoom: 1 };
   let tween = null, raf = 0;
-  const scene = { chips: [], line: null, done: null, todo: null, plane: null, ahead: null, size: 1, engines: 2 };
+  const scene = { chips: [], line: null, done: null, todo: null, plane: null, ahead: null, size: 1, engines: 2, pop: null };
   let chipHits = [];
+
+  // 위성 사진 지구: 화면의 각 점을 정사영 역변환해서 NASA 블루 마블 사진에서 색을 가져옴
+  const globeGL = initGlobeGL($('earth'));
+  function initGlobeGL(canvas) {
+    if (!window.EARTH_JPG) return null;
+    let gl = null;
+    try { gl = canvas.getContext('webgl', { alpha: true, premultipliedAlpha: true, antialias: false }); } catch (e) { gl = null; }
+    if (!gl) return null;
+    const vs = 'attribute vec2 p; void main() { gl_Position = vec4(p, 0.0, 1.0); }';
+    const fs = `precision highp float;
+      uniform sampler2D tex; uniform vec2 c; uniform float R; uniform float lam0; uniform float phi0;
+      const float PI = 3.141592653589793;
+      void main() {
+        vec2 q = (gl_FragCoord.xy - c) / R;
+        float rho = length(q);
+        if (rho > 1.0) discard;
+        float cc = asin(rho);
+        float s = sin(cc), co = cos(cc);
+        float phi = phi0, lam = lam0;
+        if (rho > 1e-7) {
+          phi = asin(clamp(co * sin(phi0) + q.y * s * cos(phi0) / rho, -1.0, 1.0));
+          lam = lam0 + atan(q.x * s, rho * co * cos(phi0) - q.y * s * sin(phi0));
+        }
+        // fract를 쓰지 않고 REPEAT 감싸기에 맡겨야 날짜변경선에 이음매 줄이 안 생김
+        vec2 uv = vec2((lam + PI) / (2.0 * PI), (0.5 * PI - phi) / PI);
+        vec3 col = texture2D(tex, uv).rgb;
+        float a = clamp((1.0 - rho) * R, 0.0, 1.0);
+        gl_FragColor = vec4(col * a, a);
+      }`;
+    const sh = (type, src) => { const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s); return gl.getShaderParameter(s, gl.COMPILE_STATUS) ? s : null; };
+    const v = sh(gl.VERTEX_SHADER, vs), f = sh(gl.FRAGMENT_SHADER, fs);
+    if (!v || !f) return null;
+    const prog = gl.createProgram();
+    gl.attachShader(prog, v); gl.attachShader(prog, f); gl.linkProgram(prog);
+    if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) return null;
+    gl.useProgram(prog);
+    const buf = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, -1, 1, 1, -1, 1, 1]), gl.STATIC_DRAW);
+    const loc = gl.getAttribLocation(prog, 'p');
+    gl.enableVertexAttribArray(loc);
+    gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
+    const U = {};
+    ['tex', 'c', 'R', 'lam0', 'phi0'].forEach((n) => { U[n] = gl.getUniformLocation(prog, n); });
+    let ready = false;
+    const img = new Image();
+    img.onload = () => {
+      let src = img;
+      const max = gl.getParameter(gl.MAX_TEXTURE_SIZE);
+      if (max < img.width) { // 작은 기기면 사진을 줄여서 올림
+        const c2 = document.createElement('canvas');
+        c2.width = max; c2.height = max / 2;
+        c2.getContext('2d').drawImage(img, 0, 0, c2.width, c2.height);
+        src = c2;
+      }
+      const t = gl.createTexture();
+      gl.bindTexture(gl.TEXTURE_2D, t);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGB, gl.RGB, gl.UNSIGNED_BYTE, src);
+      gl.generateMipmap(gl.TEXTURE_2D);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      gl.uniform1i(U.tex, 0);
+      ready = true;
+      kick();
+    };
+    img.src = window.EARTH_JPG;
+    return {
+      ready: () => ready,
+      resize() { canvas.width = Math.round(W * DPR); canvas.height = Math.round(H * DPR); },
+      render() {
+        gl.viewport(0, 0, canvas.width, canvas.height);
+        gl.clearColor(0, 0, 0, 0);
+        gl.clear(gl.COLOR_BUFFER_BIT);
+        if (!ready) return;
+        gl.uniform2f(U.c, view.cx * DPR, (H - view.cy) * DPR);
+        gl.uniform1f(U.R, view.r * view.zoom * DPR);
+        gl.uniform1f(U.lam0, toRad(view.lon));
+        gl.uniform1f(U.phi0, toRad(view.lat));
+        gl.drawArrays(gl.TRIANGLES, 0, 6);
+      },
+    };
+  }
+  const satellite = () => !!(globeGL && globeGL.ready());
 
   function resizeCanvas() {
     W = Math.max(1, window.innerWidth); H = Math.max(1, window.innerHeight);
     DPR = Math.min(2, window.devicePixelRatio || 1);
     cv.width = Math.round(W * DPR); cv.height = Math.round(H * DPR);
+    skyCv.width = cv.width; skyCv.height = cv.height;
+    if (globeGL) globeGL.resize();
+    sky.setTransform(DPR, 0, 0, DPR, 0, 0);
+    sky.fillStyle = COL.space;
+    sky.fillRect(0, 0, W, H);
+    for (const s of STARS) { sky.fillStyle = `rgba(255,255,255,${s.a})`; sky.fillRect(s.x * W, s.y * H, s.s, s.s); }
   }
   const ease = (t) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
   function lerpView(a, b, e) {
@@ -260,8 +356,9 @@
       Object.assign(view, lerpView(tween.from, tween.to, ease(t)));
       if (t >= 1) tween = null;
     }
-    draw();
-    if (tween) kick();
+    if (globeGL) globeGL.render();
+    draw(now);
+    if (tween || (scene.pop && now - scene.pop.t0 < 420)) kick();
   }
 
   function roundRect(x, y, w, h, r) {
@@ -288,15 +385,12 @@
     return p;
   }
 
-  // 지구본: 잘라낸 원이 아니라 항상 공 전체를 그림. 그라데이션 대신
-  // 단색 대기권 테두리 + 계단식 초승달 그림자로 입체감을 냄
-  function draw() {
+  // 위: 대기권 테두리, 계단식 그림자(그라데이션 없음), 확대 시 해안선·국경선, 항로·칩·비행기
+  function draw(now) {
     ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
-    ctx.fillStyle = COL.space;
-    ctx.fillRect(0, 0, W, H);
-    for (const s of STARS) { ctx.fillStyle = `rgba(255,255,255,${s.a})`; ctx.fillRect(s.x * W, s.y * H, s.s, s.s); }
+    ctx.clearRect(0, 0, W, H);
     if (!HAS_GEO) return;
-
+    const sat = satellite();
     const { cx, cy } = view;
     const R = view.r * view.zoom;
     proj.translate([cx, cy]).scale(R).rotate([-view.lon, -view.lat]);
@@ -309,19 +403,32 @@
       ctx.lineWidth = 5; ctx.strokeStyle = 'rgba(130,195,255,0.32)'; ctx.stroke();
     }
 
-    ctx.beginPath(); gpath(SPHERE); ctx.fillStyle = COL.ocean; ctx.fill();
-    ctx.beginPath(); gpath(GRAT); ctx.strokeStyle = COL.grat; ctx.lineWidth = 1; ctx.stroke();
-    ctx.beginPath(); gpath(window.WORLD_LAND); ctx.fillStyle = COL.land; ctx.fill();
-    ctx.strokeStyle = COL.landEdge; ctx.lineWidth = 1; ctx.stroke();
+    if (!sat) { // 위성 사진을 못 쓰는 환경: 단색 지도
+      ctx.beginPath(); gpath(SPHERE); ctx.fillStyle = COL.ocean; ctx.fill();
+      ctx.beginPath(); gpath(GRAT); ctx.strokeStyle = COL.grat; ctx.lineWidth = 1; ctx.stroke();
+      ctx.beginPath(); gpath(view.zoom > 3 && W50 ? W50.coast : window.WORLD_LAND); ctx.fillStyle = COL.land;
+      if (!(view.zoom > 3 && W50)) ctx.fill();
+      ctx.strokeStyle = COL.landEdge; ctx.lineWidth = 1; ctx.stroke();
+    }
+    if (W50 && view.zoom > 1.6) { // 확대하면 선명한 해안선·국경선을 덧그림
+      const k = clamp((view.zoom - 1.6) / 1.5, 0, 1);
+      ctx.lineWidth = 1;
+      ctx.beginPath(); gpath(W50.coast);
+      ctx.strokeStyle = sat ? `rgba(255,255,255,${0.45 * k})` : COL.landEdge; ctx.stroke();
+      ctx.beginPath(); gpath(W50.borders);
+      ctx.setLineDash([4, 3]);
+      ctx.strokeStyle = sat ? `rgba(255,230,160,${0.55 * k})` : `rgba(90,120,80,${0.6 * k})`; ctx.stroke();
+      ctx.setLineDash([]);
+    }
 
     if (limb) { // 오른쪽 아래로 갈수록 한 단계씩 어두워지는 초승달 그림자
       ctx.save();
       ctx.beginPath(); ctx.arc(cx, cy, R, 0, Math.PI * 2); ctx.clip();
-      [[0.07, 0.07], [0.17, 0.07], [0.32, 0.08]].forEach(([k, alpha]) => {
+      [[0.07, 0.08], [0.17, 0.08], [0.32, 0.1]].forEach(([k, alpha]) => {
         ctx.beginPath();
         ctx.rect(cx - R - 2, cy - R - 2, R * 2 + 4, R * 2 + 4);
         ctx.arc(cx - R * k, cy - R * k, R, 0, Math.PI * 2, true);
-        ctx.fillStyle = `rgba(10,35,80,${alpha})`;
+        ctx.fillStyle = `rgba(5,15,40,${alpha})`;
         ctx.fill('evenodd');
       });
       ctx.restore();
@@ -329,13 +436,18 @@
       ctx.lineWidth = 1.5; ctx.strokeStyle = 'rgba(255,255,255,0.55)'; ctx.stroke();
     }
 
+    // 항로: 위성 사진 위에서는 흰 선, 단색 지도에서는 검은 선
+    const line = sat ? COL.white : COL.ink;
     ctx.lineCap = 'round';
-    ctx.strokeStyle = COL.ink;
+    ctx.save();
+    if (sat) { ctx.shadowColor = 'rgba(0,0,0,0.6)'; ctx.shadowBlur = 4; }
+    ctx.strokeStyle = line;
     if (scene.line) { ctx.beginPath(); gpath(scene.line); ctx.lineWidth = 3; ctx.stroke(); }
     if (scene.todo) { ctx.beginPath(); gpath(scene.todo); ctx.setLineDash([8, 8]); ctx.lineWidth = 2.5; ctx.stroke(); ctx.setLineDash([]); }
     if (scene.done) { ctx.beginPath(); gpath(scene.done); ctx.lineWidth = 3.5; ctx.stroke(); }
+    ctx.restore();
 
-    drawChips();
+    drawChips(now);
 
     if (scene.plane) {
       const p = frontPoint(scene.plane);
@@ -343,16 +455,16 @@
         const q = scene.ahead ? proj(scene.ahead) : null;
         const ang = q ? Math.atan2(q[1] - p[1], q[0] - p[0]) : 0;
         const s = 1.5 * scene.size;
+        const body = sat ? COL.white : COL.ink, edge = sat ? COL.ink : COL.white;
         ctx.save();
-        ctx.shadowColor = 'rgba(0,0,0,0.35)'; ctx.shadowBlur = 8; ctx.shadowOffsetY = 3;
+        ctx.shadowColor = 'rgba(0,0,0,0.45)'; ctx.shadowBlur = 8; ctx.shadowOffsetY = 3;
         planePath(p[0], p[1], ang, s);
-        ctx.fillStyle = COL.ink; ctx.fill();
+        ctx.fillStyle = body; ctx.fill();
         ctx.restore();
         planePath(p[0], p[1], ang, s);
-        ctx.lineWidth = 1.6; ctx.strokeStyle = COL.white; ctx.stroke();
-        // 엔진
+        ctx.lineWidth = 1.4; ctx.strokeStyle = edge; ctx.stroke();
         ctx.save();
-        ctx.translate(p[0], p[1]); ctx.rotate(ang); ctx.scale(s, s); ctx.fillStyle = COL.ink;
+        ctx.translate(p[0], p[1]); ctx.rotate(ang); ctx.scale(s, s); ctx.fillStyle = body;
         const pods = scene.engines === 4 ? [[0.6, 3.4], [-1.6, 6.4]] : [[0.4, 4.2]];
         pods.forEach(([x, y]) => [y, -y].forEach((yy) => { ctx.beginPath(); ctx.ellipse(x, yy, 1.7, 0.75, 0, 0, Math.PI * 2); ctx.fill(); }));
         ctx.restore();
@@ -360,8 +472,8 @@
     }
   }
 
-  // 노란 공항 칩 (겹치면 중요도가 낮은 칩은 생략)
-  function drawChips() {
+  // 공항 칩: 고른 공항(sel)·출발 공항(here)은 노랑, 나머지는 흰색. 겹치면 덜 중요한 칩은 생략
+  function drawChips(now) {
     const placed = [];
     const drawn = [];
     ctx.font = `700 13px ${FONT}`;
@@ -376,21 +488,30 @@
     }
     for (let i = drawn.length - 1; i >= 0; i--) {
       const { c, rect } = drawn[i];
+      const hot = c.kind === 'sel' || c.kind === 'here';
       ctx.save();
-      ctx.shadowColor = 'rgba(0,0,0,0.25)'; ctx.shadowBlur = 8; ctx.shadowOffsetY = 2;
+      // 방금 고른 칩은 살짝 튀어나왔다가 제자리로
+      if (scene.pop && scene.pop.code === c.code && now) {
+        const t = clamp((now - scene.pop.t0) / 420, 0, 1);
+        const sc = 1 + 0.35 * Math.sin(t * Math.PI) * (1 - t);
+        ctx.translate(rect.x + rect.w / 2, rect.y + rect.h / 2); ctx.scale(sc, sc); ctx.translate(-(rect.x + rect.w / 2), -(rect.y + rect.h / 2));
+      }
+      ctx.save();
+      ctx.shadowColor = 'rgba(0,0,0,0.3)'; ctx.shadowBlur = 8; ctx.shadowOffsetY = 2;
       roundRect(rect.x, rect.y, rect.w, rect.h, 9);
-      ctx.fillStyle = COL.yellow; ctx.fill();
+      ctx.fillStyle = hot ? COL.yellow : 'rgba(255,255,255,0.94)'; ctx.fill();
       ctx.restore();
-      if (c.kind === 'sel' || c.kind === 'here') {
+      if (c.kind === 'sel') {
         roundRect(rect.x, rect.y, rect.w, rect.h, 9);
         ctx.lineWidth = 2.5; ctx.strokeStyle = COL.ink; ctx.stroke();
       }
-      const landing = c.kind === 'sel' || c.kind === 'cand';
+      const landing = c.kind === 'sel' && step !== 'home' || c.kind === 'cand';
       planePath(rect.x + 15, rect.y + rect.h / 2, landing ? 0.45 : -0.45, 0.6);
-      ctx.fillStyle = COL.ink; ctx.fill();
-      ctx.fillStyle = COL.ink;
+      ctx.fillStyle = hot ? COL.ink : '#55555C'; ctx.fill();
+      ctx.fillStyle = hot ? COL.ink : '#3A3A40';
       ctx.textBaseline = 'middle';
       ctx.fillText(c.code, rect.x + 27, rect.y + rect.h / 2 + 1);
+      ctx.restore();
     }
     chipHits = drawn.map((d) => Object.assign({ code: d.c.code }, d.rect));
   }
@@ -442,25 +563,25 @@
     } else if (s === 'arrive' && lastEntry && AP[lastEntry.to]) {
       center = lonlat(AP[lastEntry.to]);
     } else if (s === 'home') {
-      center = lonlat(AP[loc]);
+      center = lonlat(AP[homeSel]);
     }
-    return Object.assign(slot, { lon: center[0], lat: center[1], zoom: clamp(zoom * zoomMul, 0.15, 80) });
+    return Object.assign(slot, { lon: center[0], lat: center[1], zoom: clamp(zoom * zoomMul, 0.15, 300) });
   }
 
   function updateScene() {
     scene.chips = []; scene.line = scene.done = scene.todo = scene.plane = scene.ahead = null;
     const chip = (code, kind) => ({ code, kind, at: lonlat(AP[code]) });
     if (step === 'home') {
-      scene.chips = [chip(loc, 'here')].concat(AIRPORTS.filter((a) => a.code !== loc).map((a) => chip(a.code, 'plain')));
+      scene.chips = [chip(homeSel, 'sel')].concat(AIRPORTS.filter((a) => a.code !== homeSel).map((a) => chip(a.code, 'plain')));
     } else if (step === 'time') {
       scene.chips = [chip(depCode, 'here')];
     } else if (step === 'route') {
       const x = selected();
       const cands = routes().slice(0, 16).filter((r) => !x || r.a.code !== x.a.code).map((r) => chip(r.a.code, 'cand'));
-      scene.chips = (x ? [chip(x.a.code, 'sel')] : []).concat([chip(depCode, 'plain')], cands);
+      scene.chips = (x ? [chip(x.a.code, 'sel')] : []).concat([chip(depCode, 'here')], cands);
       if (x) scene.line = { type: 'LineString', coordinates: [lonlat(AP[depCode]), lonlat(x.a)] };
     } else if (step === 'flight' && flight) {
-      scene.chips = [chip(flight.to, 'sel'), chip(flight.from, 'plain')];
+      scene.chips = [chip(flight.to, 'sel'), chip(flight.from, 'here')];
       const ac = ACMAP[flight.aircraft];
       scene.size = ac.size; scene.engines = ac.engines;
       flightGeometry();
@@ -488,10 +609,10 @@
   const canZoom = () => HAS_GEO && step !== 'pass' && step !== 'log';
   function zoomBy(f) {
     if (!canZoom()) return;
-    zoomMul = clamp(zoomMul * f, 0.4, 40);
+    zoomMul = clamp(zoomMul * f, 0.4, 150);
     if (step === 'flight') { follow(viewFor('flight', dock.getBoundingClientRect())); return; }
-    if (tween) { tween.to.zoom = clamp(tween.to.zoom * f, 0.4, 80); return; }
-    view.zoom = clamp(view.zoom * f, 0.4, 80);
+    if (tween) { tween.to.zoom = clamp(tween.to.zoom * f, 0.4, 300); return; }
+    view.zoom = clamp(view.zoom * f, 0.4, 300);
     kick();
   }
   cv.addEventListener('pointerdown', (e) => {
@@ -543,11 +664,20 @@
     e.preventDefault();
     zoomBy(Math.exp(-e.deltaY * 0.0015));
   }, { passive: false });
-  $('zoom-in').addEventListener('click', () => zoomBy(1.5));
-  $('zoom-out').addEventListener('click', () => zoomBy(1 / 1.5));
+  $('zoom-in').addEventListener('click', () => zoomSmooth(1.8));
+  $('zoom-out').addEventListener('click', () => zoomSmooth(1 / 1.8));
+  // 버튼 확대는 한 번에 바뀌지 않고 부드럽게
+  function zoomSmooth(f) {
+    if (!canZoom()) return;
+    if (step === 'flight') { zoomMul = clamp(zoomMul * f, 0.4, 150); flyTo(viewFor('flight', dock.getBoundingClientRect()), 450); return; }
+    zoomMul = clamp(zoomMul * f, 0.4, 150);
+    const target = Object.assign({}, tween ? tween.to : view);
+    target.zoom = clamp(target.zoom * f, 0.4, 300);
+    flyTo(target, 450);
+  }
   const chipAt = (x, y) => chipHits.find((c) => x >= c.x && x <= c.x + c.w && y >= c.y && y <= c.y + c.h);
   function onChipTap(code) {
-    if (step === 'home') openAirportModal(code);
+    if (step === 'home') selectHome(code);
     else if (step === 'route' && code !== depCode) selectDest(code);
   }
 
@@ -562,7 +692,9 @@
     closeDrawers();
     const first = dock.getBoundingClientRect();
     const cs1 = getComputedStyle(dock);
-    const bg1 = cs1.backgroundColor, rad1 = cs1.borderRadius;
+    const r1 = [cs1.borderTopLeftRadius, cs1.borderTopRightRadius, cs1.borderBottomRightRadius, cs1.borderBottomLeftRadius].join(' ');
+    if (next !== 'pass') dock.classList.remove('cut');
+    const bg1 = cs1.backgroundColor, rad1 = r1;
     step = next;
     document.body.dataset.step = next;
     PANES.forEach((p) => { p.hidden = p.dataset.pane !== next; });
@@ -576,7 +708,8 @@
         left: r.left + 'px', top: r.top + 'px', width: r.width + 'px', height: r.height + 'px',
         right: 'auto', bottom: 'auto', backgroundColor: bg, borderRadius: rad,
       });
-      dock.animate([box(first, bg1, rad1), box(last, cs2.backgroundColor, cs2.borderRadius)],
+      const r2 = [cs2.borderTopLeftRadius, cs2.borderTopRightRadius, cs2.borderBottomRightRadius, cs2.borderBottomLeftRadius].join(' ');
+      dock.animate([box(first, bg1, rad1), box(last, cs2.backgroundColor, r2)],
         { duration: slow ? 1100 : 640, easing: 'cubic-bezier(.2,.8,.2,1)' });
       const pane = PANES.find((p) => !p.hidden);
       if (pane) pane.animate([{ opacity: 0, transform: 'translateY(12px)' }, { opacity: 1, transform: 'none' }],
@@ -629,13 +762,43 @@
     else back();
   });
 
+  // ---------- 모션 도우미: 바뀌는 모든 것에 짧은 움직임 ----------
+  // 글자가 바뀔 때 아래에서 올라오며 나타남
+  function setText(el, text) {
+    if (typeof el === 'string') el = $(el);
+    if (!el || el.textContent === String(text)) return;
+    el.textContent = text;
+    if (!REDUCED && el.animate) el.animate([{ opacity: 0, transform: 'translateY(6px)' }, { opacity: 1, transform: 'none' }], { duration: 260, easing: 'cubic-bezier(.2,.8,.2,1)' });
+  }
+  function setHTML(el, html) {
+    if (typeof el === 'string') el = $(el);
+    if (!el || el.innerHTML === html) return;
+    el.innerHTML = html;
+    if (!REDUCED && el.animate) el.animate([{ opacity: 0, transform: 'translateY(6px)' }, { opacity: 1, transform: 'none' }], { duration: 260, easing: 'cubic-bezier(.2,.8,.2,1)' });
+  }
+  // 나타나기·사라지기 (hidden 속성을 쓰되 애니메이션을 곁들임)
+  function showEl(el, from) {
+    if (typeof el === 'string') el = $(el);
+    if (!el.hidden) return;
+    el.hidden = false;
+    if (!REDUCED && el.animate) el.animate([from || { opacity: 0, transform: 'translateY(10px) scale(0.98)' }, { opacity: 1, transform: 'none' }], { duration: 300, easing: 'cubic-bezier(.2,.8,.2,1)' });
+  }
+  function hideEl(el, to) {
+    if (typeof el === 'string') el = $(el);
+    if (el.hidden) return Promise.resolve();
+    if (REDUCED || !el.animate) { el.hidden = true; return Promise.resolve(); }
+    const a = el.animate([{ opacity: 1, transform: 'none' }, to || { opacity: 0, transform: 'translateY(10px) scale(0.98)' }], { duration: 220, easing: 'ease-in', fill: 'forwards' });
+    return a.finished.then(() => { el.hidden = true; a.cancel(); }, () => { el.hidden = true; });
+  }
+
   // ---------- 알림 토스트 ----------
   let toastTimer = 0;
   function toast(msg) {
     const el = $('toast');
-    el.textContent = msg; el.hidden = false;
+    el.textContent = msg;
+    if (el.hidden) showEl(el, { opacity: 0, transform: 'translate(-50%, -12px)' });
     clearTimeout(toastTimer);
-    toastTimer = setTimeout(() => { el.hidden = true; }, 3400);
+    toastTimer = setTimeout(() => hideEl(el, { opacity: 0, transform: 'translate(-50%, -12px)' }), 3400);
   }
 
   // ---------- 처음 화면 ----------
@@ -656,6 +819,7 @@
     return { current, best };
   }
   function renderHome() {
+    homeSel = loc;
     const h = new Date().getHours();
     $('greet-hi').textContent = h < 5 ? '늦은 밤이에요' : h < 11 ? '좋은 아침이에요' : h < 17 ? '좋은 오후예요' : h < 22 ? '좋은 저녁이에요' : '늦은 밤이에요';
     const a = AP[loc];
@@ -666,8 +830,17 @@
     $('g-streak').textContent = `연속 ${streaks().current}일`;
     fillAircraft();
     $('plane-pill').textContent = `${acShort(prefs.aircraft)} · ${fmtNum(totalMiles())} mi`;
+    setText('journey-label', homeSel === loc ? '여정 시작' : `${homeSel}에서 여정 시작`);
   }
-  $('btn-journey').addEventListener('click', () => { depCode = loc; go('time'); });
+  // 공항 칩을 누르면: 그 공항이 노랗게 되고 지구본이 그쪽으로 돌아감 (확인은 출발 버튼에서)
+  function selectHome(code) {
+    homeSel = code;
+    scene.pop = { code, t0: performance.now() };
+    updateScene();
+    flyTo(viewFor('home', dock.getBoundingClientRect()), 900);
+    setText('journey-label', homeSel === loc ? '여정 시작' : `${homeSel}에서 여정 시작`);
+  }
+  $('btn-journey').addEventListener('click', () => openAirportModal(homeSel));
   $('btn-log').addEventListener('click', () => go('log'));
 
   // 전체 화면 + (휴대폰이면) 가로 고정. 안 되는 환경이면 안내만 함
@@ -695,16 +868,17 @@
     $('am-code').textContent = a.code;
     $('am-name').textContent = a.city;
     $('am-country').textContent = a.country;
-    $('airport-modal').hidden = false;
+    $('am-q').textContent = `${a.city}(${a.code}) 공항에서 여정을 시작하시겠습니까?`;
+    showEl('airport-modal', { opacity: 0 });
     $('am-ok').focus();
   }
-  function closeAirportModal() { $('airport-modal').hidden = true; modalCode = null; }
+  function closeAirportModal() { hideEl('airport-modal', { opacity: 0 }); modalCode = null; }
   $('am-close').addEventListener('click', closeAirportModal);
   $('am-cancel').addEventListener('click', closeAirportModal);
   $('airport-modal').addEventListener('click', (e) => { if (e.target === $('airport-modal')) closeAirportModal(); });
   $('am-ok').addEventListener('click', () => {
     if (!modalCode) return;
-    loc = depCode = modalCode; store.set('loc', loc);
+    loc = depCode = homeSel = modalCode; store.set('loc', loc);
     closeAirportModal();
     go('time');
   });
@@ -717,7 +891,7 @@
     el.innerHTML = '<div class="wheel-band"></div><ul class="wheel-list"></ul>';
     const list = el.querySelector('.wheel-list');
     const w = { items: [], idx: 0 };
-    let lis = [], settle = 0;
+    let lis = [];
     const rowH = () => (lis[0] && lis[0].offsetHeight) || 44;
     function paint() {
       const c = list.scrollTop / rowH();
@@ -732,15 +906,13 @@
       lis.forEach((li, k) => li.setAttribute('aria-selected', String(k === i)));
       if (lis[i]) el.setAttribute('aria-activedescendant', lis[i].id);
     }
+    // 굴리는 동안 가운데 칸이 바뀔 때마다 바로 반영
     list.addEventListener('scroll', () => {
       paint();
-      clearTimeout(settle);
-      settle = setTimeout(() => {
-        const i = clamp(Math.round(list.scrollTop / rowH()), 0, w.items.length - 1);
-        if (i === w.idx) return;
-        w.idx = i; mark(i);
-        onChange(w.items[i].v);
-      }, 110);
+      const i = clamp(Math.round(list.scrollTop / rowH()), 0, w.items.length - 1);
+      if (i === w.idx) return;
+      w.idx = i; mark(i);
+      onChange(w.items[i].v);
     }, { passive: true });
     list.addEventListener('click', (e) => { const li = e.target.closest('li'); if (li) scrollToIdx(+li.dataset.i, true); });
     el.addEventListener('keydown', (e) => {
@@ -793,13 +965,13 @@
   }
   function renderTimeText() {
     const m = prefs.minutes;
-    $('hm-h-val').textContent = String(Math.floor(m / 60));
-    $('hm-m-val').textContent = pad(m % 60);
+    setText('hm-h-val', String(Math.floor(m / 60)));
+    setText('hm-m-val', pad(m % 60));
     document.querySelectorAll('[data-quick]').forEach((b) => b.setAttribute('aria-pressed', String(Number(b.dataset.quick) === m)));
     const best = routes()[0];
-    $('time-best').innerHTML = best
+    setHTML('time-best', best
       ? `<span><span class="hint">가장 가까운 항공편</span><br><b>${depCode} → ${best.a.code}</b> ${esc(best.a.city)}</span><span class="ychip">${fmtHm(best.min)}</span>`
-      : '';
+      : '');
   }
   function renderTime() {
     renderTimeText();
@@ -855,7 +1027,7 @@
       return;
     }
     prefs.aircraft = id; savePrefs();
-    $('ac-name').textContent = '✈ ' + acShort(id);
+    setText('ac-name', '✈ ' + acShort(id));
   });
   function fillAircraft() {
     const miles = totalMiles();
@@ -865,7 +1037,7 @@
       v: a.id,
       t: a.miles <= miles ? esc(acShort(a.id)) : `<span class="locked">🔒 ${esc(acShort(a.id))} <small>${fmtNum(a.miles)}mi</small></span>`,
     })), prefs.aircraft);
-    $('ac-name').textContent = '✈ ' + acShort(prefs.aircraft);
+    setText('ac-name', '✈ ' + acShort(prefs.aircraft));
     const next = AIRCRAFT.find((a) => a.miles > miles);
     $('ac-next').textContent = next ? `다음 기종 ${acShort(next.id)}까지 ${fmtNum(next.miles - miles)}mi` : '모든 기종을 모았어요!';
   }
@@ -873,7 +1045,7 @@
   $('ac-btn').addEventListener('click', () => toggleDrawer('wd-ac', $('ac-btn'), wheelAc, () => prefs.aircraft));
 
   // 도착지: 한 줄에 하나씩, 정한 시간과의 차이로 묶어서 보여 줌
-  let showFar = false;
+  let showFar = false, lastCards = '';
   function destRow(x) {
     const exact = Math.abs(x.diff) <= 5;
     const diff = exact ? '딱 맞아요' : `${x.diff > 0 ? '+' : '−'}${fmtDur(Math.abs(x.diff))}`;
@@ -886,9 +1058,9 @@
   function renderRoute() {
     const key = depCode + ':' + prefs.minutes;
     if (key !== selKey || !selected()) { pickBest(); selKey = key; showFar = false; }
-    $('dep-name').textContent = `${depCode} · ${AP[depCode].city}`;
+    setText('dep-name', `${depCode} · ${AP[depCode].city}`);
     wheelDep.set(depCode);
-    $('btn-change-time').textContent = fmtHHMM(prefs.minutes);
+    setText('btn-change-time', fmtHHMM(prefs.minutes));
     fillAircraft();
     const rs = routes();
     const near1 = rs.filter((x) => Math.abs(x.diff) <= 10);
@@ -903,21 +1075,29 @@
       html += showFar ? group('그 밖의 항공편', far)
         : `<button type="button" class="more-btn" id="more-far">그 밖의 항공편 ${far.length}곳 더 보기</button>`;
     }
-    $('cards').innerHTML = html;
+    if (html !== lastCards) {
+      lastCards = html;
+      $('cards').innerHTML = html;
+      if (!REDUCED) $('cards').animate([{ opacity: 0.2, transform: 'translateY(8px)' }, { opacity: 1, transform: 'none' }], { duration: 280, easing: 'cubic-bezier(.2,.8,.2,1)' });
+    }
     renderRouteSummary();
   }
   function renderRouteSummary() {
     const x = selected();
     $('btn-go').disabled = !x;
-    if (!x) { $('dest-name').textContent = '-'; $('route-note').textContent = ''; return; }
-    $('dest-name').textContent = `${x.a.code} · ${x.a.city}`;
+    if (!x) { setText('dest-name', '-'); setText('route-note', ''); return; }
+    setText('dest-name', `${x.a.code} · ${x.a.city}`);
     const same = x.diff === 0;
     if (same) sel.mode = 'real';
-    $('mode-seg').style.visibility = same ? 'hidden' : '';
-    $('mode-real-t').textContent = fmtHHMM(x.min);
-    $('mode-mine-t').textContent = fmtHHMM(prefs.minutes);
+    $('mode-seg').classList.toggle('is-off', same);
+    $('mode-seg').dataset.mode = sel.mode; // 흰 손잡이가 미끄러지듯 이동
+    setText('mode-real-t', fmtHHMM(x.min));
+    setText('mode-mine-t', fmtHHMM(prefs.minutes));
     $('mode-real').setAttribute('aria-pressed', String(sel.mode === 'real'));
     $('mode-mine').setAttribute('aria-pressed', String(sel.mode === 'mine'));
+    setText('mini-from', depCode);
+    setText('mini-to', x.a.code);
+    setText('mini-meta', `${fmtHHMM(sel.mode === 'real' ? x.min : prefs.minutes)} · ${acShort(prefs.aircraft)}`);
     let note;
     if (sel.mode === 'real') {
       note = same ? '정한 집중 시간과 실제 비행시간이 같아요.'
@@ -927,7 +1107,7 @@
       note = Math.abs(pct) < 3 ? '실제와 거의 같은 속도로 날아요.'
         : `정한 시간 ${fmtHHMM(prefs.minutes)}에 맞춰 실제보다 ${Math.abs(pct)}% ${pct > 0 ? '빠르게' : '느리게'} 날아요.`;
     }
-    $('route-note').textContent = note;
+    setText('route-note', note);
   }
   function selectDest(code) {
     sel.to = code; sel.mode = 'real';
@@ -938,6 +1118,35 @@
     updateScene();
     flyTo(viewFor('route', dock.getBoundingClientRect()), 700);
   }
+  // 위쪽 설정 접기·펼치기: 막대를 위로 밀면 요약 한 줄 + 넓은 도착지 목록
+  const routePane = document.querySelector('.pane-route');
+  function setCompact(on) {
+    routePane.classList.toggle('compact', on);
+    $('grabber').setAttribute('aria-expanded', String(!on));
+    if (on) closeDrawers();
+  }
+  (() => {
+    const g = $('grabber');
+    let gd = null;
+    g.addEventListener('pointerdown', (e) => { gd = { y: e.clientY, moved: false }; g.setPointerCapture(e.pointerId); g.classList.add('dragging'); });
+    g.addEventListener('pointermove', (e) => {
+      if (!gd) return;
+      const dy = e.clientY - gd.y;
+      if (Math.abs(dy) > 24) { gd.moved = true; setCompact(dy < 0); gd.y = e.clientY; }
+    });
+    const end = () => {
+      if (!gd) return;
+      if (!gd.moved) setCompact(!routePane.classList.contains('compact')); // 누르기만 해도 바뀜
+      gd = null; g.classList.remove('dragging');
+    };
+    g.addEventListener('pointerup', end);
+    g.addEventListener('pointercancel', () => { gd = null; g.classList.remove('dragging'); });
+    g.addEventListener('click', (e) => { if (e.detail === 0) setCompact(!routePane.classList.contains('compact')); }); // 키보드
+    $('route-mini').addEventListener('click', () => setCompact(false));
+    // 목록을 위로 크게 끌어 올리면 자동으로 접힘
+    $('cards').addEventListener('scroll', () => { if ($('cards').scrollTop > 120 && !routePane.classList.contains('compact') && !WIDE.matches) setCompact(true); }, { passive: true });
+  })();
+
   $('cards').addEventListener('click', (e) => {
     if (e.target.closest('#more-far')) { const top = $('cards').scrollTop; showFar = true; renderRoute(); $('cards').scrollTop = top; return; }
     const c = e.target.closest('.dest');
@@ -954,19 +1163,22 @@
     $('sheet-route').textContent = `${depCode} → ${x.a.code} · ${fmtHHMM(sel.mode === 'real' ? x.min : prefs.minutes)}`;
     document.querySelectorAll('[data-subject]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.subject === prefs.subject)));
     $('custom-row').hidden = prefs.subject !== '기타';
-    $('sheet-backdrop').hidden = false;
-    $('subject-sheet').hidden = false;
+    showEl('sheet-backdrop', { opacity: 0 });
+    showEl('subject-sheet', { transform: 'translateY(100%)' });
     const cur = document.querySelector(`[data-subject="${prefs.subject}"]`);
     if (cur) cur.focus();
   }
-  function closeSheet() { $('subject-sheet').hidden = true; $('sheet-backdrop').hidden = true; }
+  function closeSheet() {
+    hideEl('subject-sheet', { transform: 'translateY(100%)' });
+    hideEl('sheet-backdrop', { opacity: 0 });
+  }
   $('sheet-backdrop').addEventListener('click', closeSheet);
   $('subjects').addEventListener('click', (e) => {
     const b = e.target.closest('[data-subject]');
     if (!b) return;
     if (b.dataset.subject === '기타') {
       document.querySelectorAll('[data-subject]').forEach((x) => x.setAttribute('aria-pressed', String(x === b)));
-      $('custom-row').hidden = false;
+      showEl('custom-row');
       $('subject-custom').focus();
       return;
     }
@@ -1036,6 +1248,7 @@
   function resetTear() {
     boarding = false; gesture = null; fly = null;
     stub.style.visibility = ''; stub.style.height = ''; stub.classList.remove('gone');
+    dock.classList.remove('cut');
     perf.classList.remove('torn');
     cut.style.transition = ''; cut.style.left = '0px'; cut.style.width = '0px';
     $('btn-board').disabled = false; $('btn-board').textContent = '탑승하기';
@@ -1112,12 +1325,10 @@
     const f = fly || makeFly();
     fly = null;
     const from = f.style.transform || 'translateY(0px) rotate(0deg)';
-    // 찢긴 조각은 떨어지고, 남은 탑승권은 톱니 모양 절취선에서 끝나도록 아래를 접음
-    stub.style.height = stub.offsetHeight + 'px';
-    void stub.offsetHeight;
+    // 찢긴 조각은 떨어지고, 남은 탑승권은 절취선에서 곧은 직선으로 끝남 (아래 꼭짓점 두 개)
     stub.classList.add('gone');
-    stub.style.height = '0px';
     perf.classList.add('torn');
+    dock.classList.add('cut');
     $('btn-board').disabled = true;
     $('btn-board').textContent = '탑승 중…';
     const cleanup = () => f.remove();
@@ -1184,28 +1395,84 @@
     noiseSrc = null;
     $('btn-noise').setAttribute('aria-pressed', 'false');
   }
+  // 기내 차임: 실제 기내 방송처럼 높은음→낮은음 두 번 울리는 종소리 (배음 + 짧은 울림)
+  let reverb = null;
+  function cabinReverb(c) {
+    if (reverb) return reverb;
+    const len = Math.floor(c.sampleRate * 0.9);
+    const ir = c.createBuffer(2, len, c.sampleRate);
+    for (let ch = 0; ch < 2; ch++) {
+      const d = ir.getChannelData(ch);
+      for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, 3);
+    }
+    reverb = c.createConvolver();
+    reverb.buffer = ir;
+    const wet = c.createGain(); wet.gain.value = 0.25;
+    reverb.connect(wet).connect(c.destination);
+    return reverb;
+  }
   function chime() {
     const c = ensureAudio();
     if (!c) return;
-    [[784, 0], [587, 0.5]].forEach(([freq, at]) => {
-      const o = c.createOscillator(), g = c.createGain();
-      o.type = 'sine'; o.frequency.value = freq;
-      const t = c.currentTime + at;
-      g.gain.setValueAtTime(0.0001, t);
-      g.gain.exponentialRampToValueAtTime(0.28, t + 0.02);
-      g.gain.exponentialRampToValueAtTime(0.0001, t + 1.6);
-      o.connect(g).connect(c.destination);
-      o.start(t); o.stop(t + 1.7);
+    const rv = cabinReverb(c);
+    [[1318.5, 0], [1046.5, 0.62]].forEach(([freq, at]) => {
+      const t = c.currentTime + 0.05 + at;
+      const out = c.createGain();
+      out.gain.setValueAtTime(0.0001, t);
+      out.gain.exponentialRampToValueAtTime(0.22, t + 0.006);
+      out.gain.exponentialRampToValueAtTime(0.0001, t + 2.2);
+      const lp = c.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 3200;
+      out.connect(lp); lp.connect(c.destination); lp.connect(rv);
+      [[1, 1], [2.01, 0.28], [3.02, 0.12], [4.2, 0.05]].forEach(([mul, amp]) => { // 종소리 배음
+        const o = c.createOscillator(), g = c.createGain();
+        o.type = 'sine'; o.frequency.value = freq * mul;
+        g.gain.setValueAtTime(amp, t);
+        g.gain.exponentialRampToValueAtTime(0.0001, t + 2.2 / mul);
+        o.connect(g).connect(out);
+        o.start(t); o.stop(t + 2.3);
+      });
     });
   }
+
+  // 기내 방송 음성: 한국어 방송 뒤에 영어 방송. 기장은 낮고 차분하게, 승무원은 밝게
   const HAS_VOICE = 'speechSynthesis' in window && 'SpeechSynthesisUtterance' in window;
-  function speak(text) {
-    if (!HAS_VOICE || !prefs.voice) return;
+  let voices = [];
+  const loadVoices = () => { try { voices = speechSynthesis.getVoices() || []; } catch (e) { voices = []; } };
+  if (HAS_VOICE) {
+    loadVoices();
+    if (speechSynthesis.addEventListener) speechSynthesis.addEventListener('voiceschanged', loadVoices);
+  }
+  function pickVoice(lang, prefer) {
+    const list = voices.filter((v) => (v.lang || '').toLowerCase().replace('_', '-').startsWith(lang));
+    const score = (v) => (/natural|neural|online|premium|enhanced/i.test(v.name) ? 4 : 0)
+      + (/google/i.test(v.name) ? 3 : 0) + (prefer && prefer.test(v.name) ? 2 : 0);
+    return list.sort((a, b) => score(b) - score(a))[0] || null;
+  }
+  function duck(on) { // 방송하는 동안 엔진 소음을 낮춤
+    if (noiseGain && actx) noiseGain.gain.setTargetAtTime(on ? 0.1 : 0.4, actx.currentTime, 0.4);
+  }
+  function speak(ann) {
+    if (!HAS_VOICE || !prefs.voice || !ann) return;
     try {
-      const u = new SpeechSynthesisUtterance(text);
-      u.lang = 'ko-KR'; u.rate = 1.02;
       speechSynthesis.cancel();
-      setTimeout(() => speechSynthesis.speak(u), 1100); // 차임이 끝난 뒤
+      const captain = ann.role === 'captain';
+      const make = (text, lang, voice) => {
+        const u = new SpeechSynthesisUtterance(text);
+        u.lang = lang;
+        if (voice) u.voice = voice;
+        u.rate = captain ? 0.92 : 0.98;
+        u.pitch = captain ? 0.8 : 1.12;
+        u.volume = 1;
+        return u;
+      };
+      const ko = make(ann.ko, 'ko-KR', pickVoice('ko', captain ? /InJoon|male/i : /SunHi|Yuna|Heami|female/i));
+      const en = ann.en ? make(ann.en, 'en-US', pickVoice('en', captain ? /Guy|Daniel|male|UK/i : /Jenny|Aria|Samantha|female|US/i)) : null;
+      ko.onstart = () => duck(true);
+      (en || ko).onend = () => duck(false);
+      setTimeout(() => { // 차임이 끝난 뒤, 한국어 → 잠깐 쉼 → 영어
+        speechSynthesis.speak(ko);
+        if (en) speechSynthesis.speak(en);
+      }, 1700);
     } catch (e) { /* 음성 없음 */ }
   }
   if (!HAS_VOICE) $('btn-voice').hidden = true;
@@ -1237,25 +1504,69 @@
   // ---------- 4. 비행 중 ----------
   const progressOf = (f, now) => clamp((now - f.startAt) / (f.endAt - f.startAt), 0, 1);
 
+  // 실제 항공사 기내 방송 말투 (한국어 + 영어)
+  function hmEn(min) {
+    const h = Math.floor(min / 60), m = Math.round(min % 60);
+    const hs = h ? `${h} hour${h > 1 ? 's' : ''}` : '';
+    const ms = m ? `${m} minute${m > 1 ? 's' : ''}` : '';
+    return [hs, ms].filter(Boolean).join(' and ') || 'less than a minute';
+  }
   function announcement(f, idx, p) {
-    const city = AP[f.to].city;
+    const a = AP[f.to], city = a.city, cityEn = a.en || a.code;
+    const fn = f.flightNo.replace('FA ', '');
+    const hour = new Date().getHours();
+    const part = hour < 12 ? 'morning' : hour < 18 ? 'afternoon' : 'evening';
     switch (idx) {
-      case 0: return `${f.flightNo}편 ${city}행에 탑승하신 것을 환영합니다. 오늘 집중할 과목은 ${f.subject}입니다. 휴대전화는 비행기 모드로 바꿔 주세요.`;
-      case 1: return `승무원 이륙 준비. 곧 이륙합니다. 지금부터 ${f.subject}에 집중해 주세요.`;
+      case 0: return {
+        role: 'crew',
+        ko: `손님 여러분, 안녕하십니까. 오늘도 포커스 에어를 이용해 주셔서 감사합니다. 이 비행기는 ${city}까지 가는 포커스 에어 ${fn}편입니다. 목적지까지 예정 비행시간은 ${fmtDur(f.minutes)}이며, 오늘 집중하실 과목은 ${f.subject}입니다. 출발 전 휴대전화는 비행기 모드로 전환해 주시기 바랍니다.`,
+        en: `Good ${part}, ladies and gentlemen. Welcome aboard Focus Air flight ${fn} to ${cityEn}. Our flight time today will be ${hmEn(f.minutes)}. Please switch your mobile phone to flight mode.`,
+      };
+      case 1: return {
+        role: 'crew',
+        ko: `손님 여러분, 우리 비행기는 곧 이륙하겠습니다. 좌석벨트를 매 주시고, 지금부터 ${f.subject}에 집중해 주시기 바랍니다.`,
+        en: 'Ladies and gentlemen, we are now ready for take-off. Please make sure your seatbelt is securely fastened.',
+      };
       case 2: {
-        const alt = Math.round(profileOf(f).alt(p) / 1000) * 1000;
+        const prof = profileOf(f);
+        const alt = Math.round(prof.alt(p) / 1000) * 1000;
+        const spd = Math.round(prof.speed(p) / 10) * 10;
         const remain = Math.max(1, Math.round((1 - p) * f.minutes));
-        return `기장입니다. 순항 고도 ${fmtNum(alt)}피트에 도달했습니다. ${city}까지 ${fmtDur(remain)} 남았습니다. 편안하게 집중하세요.`;
+        return {
+          role: 'captain',
+          ko: `손님 여러분, 안녕하십니까. 기장입니다. 우리 비행기는 현재 ${fmtNum(alt)}피트 상공을 시속 ${fmtNum(spd)}킬로미터로 순항하고 있습니다. ${city}까지 남은 비행시간은 약 ${fmtDur(remain)}입니다. 목적지까지 편안하게 집중하시기 바랍니다.`,
+          en: `Ladies and gentlemen, this is your captain speaking. We are now cruising at ${fmtNum(alt)} feet. Our remaining flight time to ${cityEn} is about ${hmEn(remain)}. Enjoy your focus time.`,
+        };
       }
-      case 3: return `${city} 도착을 위해 하강을 시작합니다. 오늘 공부한 내용을 정리해 보세요.`;
-      default: return '곧 착륙합니다. 좌석 등받이와 테이블을 제자리로 해 주세요.';
+      case 3: return {
+        role: 'crew',
+        ko: `손님 여러분, 우리 비행기는 ${city} 공항 도착을 위해 강하를 시작했습니다. 지금까지 공부한 내용을 차분히 정리해 주시기 바랍니다.`,
+        en: `Ladies and gentlemen, we have started our descent into ${cityEn}. Please take a moment to review what you have studied.`,
+      };
+      case 5: return {
+        role: 'crew',
+        ko: `손님 여러분, 우리 비행기는 ${city} 공항에 도착했습니다. ${f.subject} 집중 비행을 끝까지 마치신 것을 축하드립니다. 오늘도 포커스 에어를 이용해 주셔서 감사합니다.`,
+        en: `Ladies and gentlemen, welcome to ${cityEn}. Congratulations on completing your focus flight. Thank you for flying Focus Air.`,
+      };
+      default: return {
+        role: 'crew',
+        ko: '손님 여러분, 우리 비행기는 곧 착륙하겠습니다. 좌석 등받이와 테이블을 제자리로 해 주시고, 좌석벨트를 매 주시기 바랍니다.',
+        en: 'Ladies and gentlemen, we will be landing shortly. Please return your seat back and tray table to their upright position.',
+      };
     }
   }
-  function setPA(text, time) { $('pa-text').textContent = text; $('pa-time').textContent = fmtHM(time); }
+  function setPA(text, time) { setText('pa-text', text); setText('pa-time', fmtHM(time)); }
+  // 단계 표시: 한 번 만들고 클래스만 바꿔서 막대 색이 천천히 차오르게
   function renderPhases(idx) {
-    $('phases').innerHTML = PHASES.map((ph, i) =>
-      `<li class="phase ${i < idx ? 'is-done' : i === idx ? 'is-now' : ''}"${i === idx ? ' aria-current="step"' : ''}><b>${ph.en}</b>${ph.ko}</li>`
-    ).join('');
+    const ol = $('phases');
+    if (ol.children.length !== PHASES.length) {
+      ol.innerHTML = PHASES.map((ph) => `<li class="phase"><b>${ph.en}</b>${ph.ko}</li>`).join('');
+    }
+    [...ol.children].forEach((li, i) => {
+      li.classList.toggle('is-done', i < idx);
+      li.classList.toggle('is-now', i === idx);
+      if (i === idx) li.setAttribute('aria-current', 'step'); else li.removeAttribute('aria-current');
+    });
   }
 
   let lastPhaseRendered = -1, lastText = 0, lastTitle = '';
@@ -1275,7 +1586,7 @@
     renderPhases(idx);
     lastPhaseRendered = idx;
     // 새로고침 뒤에는 지난 방송을 다시 울리지 않고 문구만 보여 줌
-    if (f.phase >= 0) setPA(announcement(f, f.phase, p), Date.now());
+    if (f.phase >= 0) setPA(announcement(f, f.phase, p).ko, Date.now());
     lastText = 0;
     updateTexts(f, p, Date.now());
   }
@@ -1308,10 +1619,10 @@
     if (idx !== f.phase) {
       f.phase = idx;
       store.set('flight', f);
-      const text = announcement(f, idx, p);
-      setPA(text, now);
+      const ann = announcement(f, idx, p);
+      setPA(ann.ko, now);
       chime();
-      speak(text);
+      speak(ann);
     }
     if (step !== 'flight') return;
     if (idx !== lastPhaseRendered) { renderPhases(idx); lastPhaseRendered = idx; }
@@ -1332,7 +1643,7 @@
   $('btn-voice').addEventListener('click', () => {
     prefs.voice = !prefs.voice; savePrefs();
     $('btn-voice').setAttribute('aria-pressed', String(prefs.voice));
-    if (prefs.voice && flight) speak($('pa-text').textContent);
+    if (prefs.voice && flight) speak(announcement(flight, Math.max(0, flight.phase), progressOf(flight, Date.now())));
     else if (HAS_VOICE) speechSynthesis.cancel();
   });
   $('btn-wake').addEventListener('click', () => {
@@ -1346,10 +1657,10 @@
     $('abort-text').textContent = min >= 1
       ? `정말 비행을 중단할까요? 지금까지 집중한 ${fmtDur(min)}은 로그북에 '회항'으로 남고, 착륙 성공으로는 세지 않아요.`
       : '정말 비행을 중단할까요? 1분이 지나지 않아 기록은 남지 않아요.';
-    $('abort-confirm').hidden = false;
-    $('btn-abort').hidden = true;
+    showEl('abort-confirm');
+    hideEl('btn-abort', { opacity: 0, transform: 'scale(0.9)' });
   });
-  $('abort-cancel').addEventListener('click', () => { $('abort-confirm').hidden = true; $('btn-abort').hidden = false; });
+  $('abort-cancel').addEventListener('click', () => { hideEl('abort-confirm').then(() => showEl('btn-abort', { opacity: 0, transform: 'scale(0.9)' })); });
   $('abort-ok').addEventListener('click', () => land(true));
 
   // ---------- 5. 도착 / 회항 ----------
@@ -1389,7 +1700,7 @@
     if (!diverted) {
       loc = depCode = f.to; store.set('loc', loc);
       chime();
-      speak(`${AP[f.to].city}에 도착했습니다. 오늘도 수고하셨습니다.`);
+      speak(announcement(f, 5, 1));
     }
     lastEntry = entry;
     renderArrival(entry, newAc);
@@ -1415,7 +1726,8 @@
     $('a-km').textContent = fmtKm(e.km);
     $('a-miles').textContent = '+' + fmtNum(e.miles);
     $('a-streak').textContent = streaks().current + '일';
-    $('a-unlock').hidden = !newAc;
+    $('a-unlock').hidden = true;
+    if (newAc) setTimeout(() => showEl('a-unlock', { opacity: 0, transform: 'scale(0.9)' }), 700);
     if (newAc) $('a-unlock-name').textContent = newAc.name;
     $('break-clock').textContent = '--:--';
     $('break-msg').textContent = '다음 비행 전에 물 한 잔 마시고 스트레칭해요.';
@@ -1502,8 +1814,8 @@
     $('btn-reset').hidden = !log.length;
     $('reset-confirm').hidden = true;
   }
-  $('btn-reset').addEventListener('click', () => { $('reset-confirm').hidden = false; $('btn-reset').hidden = true; });
-  $('reset-cancel').addEventListener('click', () => { $('reset-confirm').hidden = true; $('btn-reset').hidden = false; });
+  $('btn-reset').addEventListener('click', () => { hideEl('btn-reset').then(() => showEl('reset-confirm')); });
+  $('reset-cancel').addEventListener('click', () => { hideEl('reset-confirm').then(() => showEl('btn-reset')); });
   $('reset-ok').addEventListener('click', () => {
     log = []; store.del('log');
     if (!flight) { loc = depCode = 'ICN'; store.del('loc'); }

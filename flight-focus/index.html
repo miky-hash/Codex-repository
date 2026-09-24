@@ -12,6 +12,8 @@
 <body data-step="home">
 
 <!-- 배경: 우주 + 지구본 (단계마다 위치·크기가 부드럽게 바뀜) -->
+<canvas id="sky" aria-hidden="true"></canvas>
+<canvas id="earth" aria-hidden="true"></canvas>
 <canvas id="map" aria-label="지구본 지도. 끌어서 돌리고, 두 손가락이나 휠로 확대·축소해요." role="img"></canvas>
 <div class="scrim" id="scrim"></div>
 <div class="zoom" id="zoom" role="group" aria-label="지구본 확대·축소">
@@ -51,7 +53,7 @@
 
   <!-- 처음 화면: 검은 알약 버튼 -->
   <div class="pane pane-home" data-pane="home">
-    <button type="button" class="dock-cta" id="btn-journey">여정 시작</button>
+    <button type="button" class="dock-cta" id="btn-journey"><span id="journey-label">여정 시작</span></button>
   </div>
 
   <!-- 1. 소요 시간 -->
@@ -87,6 +89,11 @@
       <p class="eyebrow">2 / 3 · 출발지와 도착지</p>
       <h2>어디로 날아갈까요?</h2>
     </div>
+    <button type="button" class="route-mini" id="route-mini" aria-label="위쪽 설정 펼치기">
+      <span class="ychip" id="mini-from">ICN</span><span class="mini-arrow" aria-hidden="true">→</span><span class="ychip" id="mini-to">NRT</span>
+      <span class="mini-meta" id="mini-meta">03:00 · A220-300</span>
+    </button>
+    <div class="route-top" id="route-top">
     <div class="od">
       <button type="button" class="od-row od-btn" id="od-dep" aria-expanded="false" aria-controls="wd-dep">
         <span class="od-dot">A</span>
@@ -102,6 +109,7 @@
     </div>
     <div class="route-opts">
       <div class="seg" id="mode-seg" role="group" aria-label="비행 시간 기준">
+        <span class="seg-thumb" aria-hidden="true"></span>
         <button type="button" id="mode-real" aria-pressed="true">실제 <b id="mode-real-t">00:00</b></button>
         <button type="button" id="mode-mine" aria-pressed="false">내 시간 <b id="mode-mine-t">00:00</b></button>
       </div>
@@ -109,6 +117,8 @@
     </div>
     <div class="wheel-drawer" id="wd-ac"><div class="wheel" id="wheel-ac"></div><p class="hint center" id="ac-next"></p></div>
     <p class="hint" id="route-note"></p>
+    </div>
+    <button type="button" class="grabber" id="grabber" aria-expanded="true" aria-controls="route-top" aria-label="위쪽 설정 접기·펼치기 (위로 밀면 도착지 목록이 넓어져요)"><span></span></button>
     <div class="dest-list" id="cards" role="listbox" aria-label="도착지 후보"></div>
     <button type="button" class="btn-black" id="btn-go">GO!</button>
   </div>
@@ -301,7 +311,7 @@
       <b id="am-name">인천</b>
       <span class="hint" id="am-country">대한민국</span>
     </div>
-    <p class="am-q">이 공항에서 여정을 시작하시겠습니까?</p>
+    <p class="am-q" id="am-q">이 공항에서 여정을 시작하시겠습니까?</p>
     <div class="two-btn">
       <button type="button" class="btn-gray" id="am-cancel">취소</button>
       <button type="button" class="btn-black" id="am-ok">확인</button>
@@ -314,6 +324,8 @@
 <script src="vendor/d3-array.min.js"></script>
 <script src="vendor/d3-geo.min.js"></script>
 <script src="world.js"></script>
+<script src="world50.js"></script>
+<script src="earth-texture.js"></script>
 <script src="airports.js"></script>
 <script src="app.js"></script>
 </body>
