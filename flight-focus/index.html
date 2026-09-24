@@ -1,0 +1,341 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>포커스 에어</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700;900&display=swap">
+<link rel="stylesheet" href="style.css">
+</head>
+<body data-step="home">
+
+<!-- 배경: 우주 + 지구본 (단계마다 위치·크기가 부드럽게 바뀜) -->
+<canvas id="sky" aria-hidden="true"></canvas>
+<canvas id="earth" aria-hidden="true"></canvas>
+<div id="mlmap" aria-hidden="true"></div>
+<canvas id="map" aria-label="지구본 지도. 끌어서 돌리고, 두 손가락이나 휠로 확대·축소해요." role="img"></canvas>
+<div class="scrim" id="scrim"></div>
+<div class="map-menu" id="map-menu" role="group" aria-label="지도 종류" hidden>
+  <button type="button" data-map="normal"><span class="map-thumb t-normal" aria-hidden="true"></span>일반</button>
+  <button type="button" data-map="satellite"><span class="map-thumb t-satellite" aria-hidden="true"></span>위성</button>
+  <button type="button" data-map="terrain"><span class="map-thumb t-terrain" aria-hidden="true"></span>지형</button>
+</div>
+<p class="attrib" id="attrib"></p>
+<div class="zoom" id="zoom" role="group" aria-label="지도 조작">
+  <button type="button" class="round sm" id="map-btn" aria-label="지도 종류 바꾸기" aria-expanded="false" aria-controls="map-menu"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 3 8l9 5 9-5-9-5Z M3 12.5l9 5 9-5 M3 17l9 5 9-5" stroke="currentColor" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/></svg></button>
+  <button type="button" class="round sm" id="zoom-in" aria-label="확대"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/></svg></button>
+  <button type="button" class="round sm" id="zoom-out" aria-label="축소"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/></svg></button>
+</div>
+
+<!-- 상단 -->
+<header class="topbar">
+  <button type="button" class="round" id="btn-back" aria-label="뒤로">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5 8 12l7 7" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+  </button>
+  <div class="greet">
+    <p class="greet-hi" id="greet-hi">좋은 저녁이에요</p>
+    <p class="greet-loc" id="greet-loc">인천, 대한민국</p>
+    <div class="greet-chips">
+      <span class="gchip" id="g-today">오늘 0분</span>
+      <span class="gchip" id="g-streak">연속 0일</span>
+    </div>
+  </div>
+  <div class="top-right">
+    <span class="pill-white" id="plane-pill">A220-300 · 0 mi</span>
+    <button type="button" class="round" id="btn-full" aria-label="전체 화면">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    </button>
+    <button type="button" class="round" id="btn-log" aria-label="로그북">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4.5h10.5a3 3 0 0 1 3 3V20H8a3 3 0 0 1-3-3Z M5 17a3 3 0 0 1 3-3h10.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
+    </button>
+  </div>
+</header>
+
+<!-- 비행 단계 (비행 중에만) -->
+<ol class="phases" id="phases" aria-label="비행 단계"></ol>
+
+<!-- 모양이 바뀌며 움직이는 박스 -->
+<section class="dock" id="dock" aria-live="polite">
+
+  <!-- 처음 화면: 검은 알약 버튼 -->
+  <div class="pane pane-home" data-pane="home">
+    <button type="button" class="dock-cta" id="btn-journey"><span id="journey-label">여정 시작</span></button>
+  </div>
+
+  <!-- 1. 소요 시간 -->
+  <div class="pane pane-time" data-pane="time" hidden>
+    <div class="pane-head">
+      <p class="eyebrow">1 / 3 · 소요 시간</p>
+      <h2>얼마나 집중할까요?</h2>
+    </div>
+    <div class="hm">
+      <button type="button" class="hm-field" id="hm-h" aria-expanded="false" aria-controls="wd-h" aria-label="시간 고르기"><b id="hm-h-val">1</b><span class="caret" aria-hidden="true"></span></button>
+      <span class="hm-unit">h</span>
+      <button type="button" class="hm-field" id="hm-m" aria-expanded="false" aria-controls="wd-m" aria-label="분 고르기"><b id="hm-m-val">00</b><span class="caret" aria-hidden="true"></span></button>
+      <span class="hm-unit">m</span>
+    </div>
+    <div class="hm-wheels">
+      <div class="wheel-drawer" id="wd-h"><div class="wheel" id="wheel-h"></div></div>
+      <div class="wheel-drawer" id="wd-m"><div class="wheel" id="wheel-m"></div></div>
+    </div>
+    <div class="chips center" role="group" aria-label="빠른 선택">
+      <button type="button" class="chip" data-quick="25">25분</button>
+      <button type="button" class="chip" data-quick="50">50분</button>
+      <button type="button" class="chip" data-quick="90">1:30</button>
+      <button type="button" class="chip" data-quick="150">2:30</button>
+      <button type="button" class="chip" data-quick="240">4:00</button>
+    </div>
+    <div class="best" id="time-best"></div>
+    <button type="button" class="btn-black" id="btn-to-route">출발지 · 도착지 고르기</button>
+  </div>
+
+  <!-- 2. 출발지 / 도착지 -->
+  <div class="pane pane-route" data-pane="route" hidden>
+    <div class="pane-head">
+      <p class="eyebrow">2 / 3 · 출발지와 도착지</p>
+      <h2>어디로 날아갈까요?</h2>
+    </div>
+    <button type="button" class="route-mini" id="route-mini" aria-label="위쪽 설정 펼치기">
+      <span class="ychip" id="mini-from">ICN</span><span class="mini-arrow" aria-hidden="true">→</span><span class="ychip" id="mini-to">NRT</span>
+      <span class="mini-meta" id="mini-meta">03:00 · A220-300</span>
+    </button>
+    <div class="route-top" id="route-top">
+    <div class="od">
+      <button type="button" class="od-row od-btn" id="od-dep" aria-expanded="false" aria-controls="wd-dep">
+        <span class="od-dot">A</span>
+        <span class="od-field"><span class="od-label">출발지</span><b id="dep-name">ICN · 인천</b></span>
+        <span class="caret" aria-hidden="true"></span>
+      </button>
+      <div class="wheel-drawer" id="wd-dep"><div class="wheel" id="wheel-dep"></div></div>
+      <div class="od-row">
+        <span class="od-dot">B</span>
+        <span class="od-field"><span class="od-label">도착지</span><b id="dest-name">-</b></span>
+        <button type="button" class="od-time" id="btn-change-time" aria-label="집중 시간 바꾸기">01:00</button>
+      </div>
+    </div>
+    <div class="route-opts">
+      <div class="seg" id="mode-seg" role="group" aria-label="비행 시간 기준">
+        <span class="seg-thumb" aria-hidden="true"></span>
+        <button type="button" id="mode-real" aria-pressed="true">실제 <b id="mode-real-t">00:00</b></button>
+        <button type="button" id="mode-mine" aria-pressed="false">내 시간 <b id="mode-mine-t">00:00</b></button>
+      </div>
+      <button type="button" class="pill-btn" id="ac-btn" aria-expanded="false" aria-controls="wd-ac"><span id="ac-name">A220-300</span><span class="caret" aria-hidden="true"></span></button>
+    </div>
+    <div class="wheel-drawer" id="wd-ac"><div class="wheel" id="wheel-ac"></div><p class="hint center" id="ac-next"></p></div>
+    <p class="hint" id="route-note"></p>
+    </div>
+    <button type="button" class="grabber" id="grabber" aria-expanded="true" aria-controls="route-top" aria-label="위쪽 설정 접기·펼치기 (위로 밀면 도착지 목록이 넓어져요)"><span></span></button>
+    <div class="dest-list" id="cards" role="listbox" aria-label="도착지 후보"></div>
+    <button type="button" class="btn-black" id="btn-go">GO!</button>
+  </div>
+
+  <!-- 3. 탑승권 -->
+  <div class="pane pane-pass" data-pane="pass" hidden>
+    <div class="bp-top">
+      <div>
+        <p class="bp-title">탑승권</p>
+        <p class="bp-sub">비행 <span id="p-flight">FA 000</span></p>
+      </div>
+      <span class="now-pill">지금</span>
+    </div>
+    <div class="bp-route">
+      <div><b id="p-from">ICN</b><span id="p-from-city">인천</span></div>
+      <div class="bp-mid">
+        <span class="bp-line"><svg viewBox="-13 -10 26 20" aria-hidden="true"><path d="M11 0 8 1.3 2 1.5-3.5 9H-6l3.5-7.5L-8 1.3-10.5 4.5h-2L-11.2 0l-1.3-4.5h2L-8-1.3l5.5-.2L-6-9h2.5L2-1.5l6 .2Z"/></svg></span>
+        <span id="p-dur">0h 00m</span>
+      </div>
+      <div class="ta-r"><b id="p-to">NRT</b><span id="p-to-city">도쿄</span></div>
+    </div>
+    <dl class="bp-grid">
+      <div><dt>Flight time</dt><dd id="p-ft">00:00</dd></div>
+      <div><dt>Subject</dt><dd id="p-subject">공부</dd></div>
+      <div><dt>Gate</dt><dd id="p-gate">A1</dd></div>
+      <div><dt>Boarding</dt><dd id="p-board">--:--</dd></div>
+      <div><dt>Arrival</dt><dd id="p-arr">--:--</dd></div>
+      <div><dt>Aircraft</dt><dd id="p-ac">A220</dd></div>
+      <div><dt>Distance</dt><dd id="p-km">0km</dd></div>
+      <div><dt>Date</dt><dd id="p-date">-</dd></div>
+    </dl>
+    <div class="perf" id="perf" aria-hidden="true"><span class="perf-cut" id="perf-cut"></span></div>
+    <div class="stub" id="stub">
+      <div class="barcode" id="barcode"></div>
+      <span class="stub-hint">✂ 절취선을 따라 긋거나 바코드를 끌어내려요</span>
+    </div>
+  </div>
+
+  <!-- 4. 비행 중 -->
+  <div class="pane pane-flight" data-pane="flight" hidden>
+    <div class="fl-head">
+      <span class="ychip" id="f-flight">FA 000</span>
+      <b id="f-route">ICN → NRT</b>
+      <span class="subj-pill" id="f-subject">공부</span>
+    </div>
+    <div class="fl-big">
+      <div><span class="label">Time remaining</span><b id="f-remain">00:00</b></div>
+      <div class="ta-r"><span class="label">Distance remaining</span><b id="f-dist">0 km</b></div>
+    </div>
+    <div class="bar"><div id="f-bar"></div></div>
+    <dl class="tele">
+      <div><dt>고도</dt><dd id="t-alt">0 ft</dd></div>
+      <div><dt>대지 속도</dt><dd><span id="t-spd">0 km/h</span> <small id="t-trend"></small></dd></div>
+      <div><dt>도착 예정</dt><dd id="t-eta">--:--</dd></div>
+      <div><dt>적립 예정</dt><dd id="t-miles">0 mi</dd></div>
+    </dl>
+    <div class="pa">
+      <div class="pa-head"><span class="label">기내 방송</span><span class="label" id="pa-time"></span></div>
+      <p id="pa-text"></p>
+      <p class="hint" id="pa-ko"></p>
+    </div>
+    <div class="controls">
+      <button type="button" class="tbtn" id="btn-noise" aria-pressed="false">기내 소음</button>
+      <button type="button" class="tbtn" id="btn-voice" aria-pressed="false">방송 음성</button>
+      <button type="button" class="tbtn" id="btn-wake" aria-pressed="false">화면 켜두기</button>
+      <button type="button" class="tbtn danger" id="btn-abort">비행 중단</button>
+    </div>
+    <div class="confirm" id="abort-confirm" hidden>
+      <p id="abort-text">정말 비행을 중단할까요?</p>
+      <div class="confirm-actions">
+        <button type="button" class="btn-gray" id="abort-cancel">계속 비행</button>
+        <button type="button" class="btn-black danger-bg" id="abort-ok">회항하기</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 5. 도착 / 회항 -->
+  <div class="pane pane-arrive" data-pane="arrive" hidden>
+    <div class="stamp" id="a-stamp">
+      <span class="stamp-top" id="a-stamp-top">ARRIVED</span>
+      <span class="stamp-code" id="a-stamp-code">NRT</span>
+      <span class="stamp-date" id="a-stamp-date">2026.01.01</span>
+    </div>
+    <div class="pane-head">
+      <h2 id="a-title">도착했어요</h2>
+      <p class="hint" id="a-sub"></p>
+    </div>
+    <dl class="a-stats">
+      <div><dt>집중 시간</dt><dd id="a-min">0분</dd></div>
+      <div><dt>비행 거리</dt><dd id="a-km">0km</dd></div>
+      <div><dt>적립 마일</dt><dd id="a-miles">0</dd></div>
+      <div><dt>연속 집중일</dt><dd id="a-streak">0일</dd></div>
+    </dl>
+    <div class="unlock" id="a-unlock" hidden>
+      <span class="ychip">새 기종 해금</span>
+      <b id="a-unlock-name">-</b>
+    </div>
+    <div class="break">
+      <div class="break-head">
+        <b>환승 대기 · 쉬는 시간</b>
+        <div class="chips" role="group" aria-label="쉬는 시간">
+          <button type="button" class="chip" data-break="5">5분</button>
+          <button type="button" class="chip" data-break="10">10분</button>
+          <button type="button" class="chip" data-break="15">15분</button>
+        </div>
+      </div>
+      <div class="break-clock" id="break-clock">--:--</div>
+      <p class="hint" id="break-msg">다음 비행 전에 물 한 잔 마시고 스트레칭해요.</p>
+    </div>
+    <div class="two-btn">
+      <button type="button" class="btn-gray" id="btn-home">처음으로</button>
+      <button type="button" class="btn-black" id="btn-next">다음 여정</button>
+    </div>
+  </div>
+
+  <!-- 로그북 -->
+  <div class="pane pane-log" data-pane="log" hidden>
+    <div class="pane-head">
+      <h2>비행 로그북</h2>
+      <p class="hint">이 기기의 브라우저에만 저장돼요.</p>
+    </div>
+    <dl class="log-stats">
+      <div><dt>착륙 성공</dt><dd id="s-flights">0</dd></div>
+      <div><dt>총 집중 시간</dt><dd id="s-time">0분</dd></div>
+      <div><dt>누적 마일리지</dt><dd id="s-miles">0</dd></div>
+      <div><dt>연속 집중일</dt><dd id="s-streak">0일</dd><span class="hint" id="s-best">최고 0일</span></div>
+    </dl>
+    <div class="log-cols">
+      <section class="box">
+        <h3>과목별 집중 시간</h3>
+        <div class="hbars" id="subject-bars"></div>
+      </section>
+      <section class="box">
+        <h3>격납고</h3>
+        <ul class="hangar" id="hangar"></ul>
+      </section>
+    </div>
+    <section class="box">
+      <h3>방문한 도시 <span class="hint" id="s-cities-n"></span></h3>
+      <div class="city-chips" id="s-cities"></div>
+    </section>
+    <div class="table-wrap">
+      <table class="log-table">
+        <thead><tr><th>날짜</th><th>편명</th><th>구간</th><th>과목</th><th>기종</th><th>집중</th><th>마일</th><th>결과</th></tr></thead>
+        <tbody id="log-body"></tbody>
+      </table>
+    </div>
+    <div class="log-foot">
+      <button type="button" class="btn-gray danger-text" id="btn-reset">기록 모두 지우기</button>
+      <div class="confirm" id="reset-confirm" hidden>
+        <p>로그북, 마일리지, 현재 위치를 모두 지울까요? 되돌릴 수 없어요.</p>
+        <div class="confirm-actions">
+          <button type="button" class="btn-gray" id="reset-cancel">취소</button>
+          <button type="button" class="btn-black danger-bg" id="reset-ok">모두 지우기</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- 탑승권 옆 버튼 -->
+<div class="side-action" id="side-action">
+  <button type="button" class="btn-black big" id="btn-board">탑승하기</button>
+  <p class="side-hint">절취선을 손가락으로 따라 그어도 찢어지고 탑승해요.</p>
+</div>
+
+<!-- 과목 고르기 (아래에서 올라오는 시트) -->
+<div class="sheet-backdrop" id="sheet-backdrop" hidden></div>
+<div class="sheet" id="subject-sheet" role="dialog" aria-modal="true" aria-labelledby="sheet-title" hidden>
+  <span class="sheet-handle" aria-hidden="true"></span>
+  <p class="hint" id="sheet-route">ICN → NRT</p>
+  <h2 id="sheet-title">무엇에 집중하시겠습니까?</h2>
+  <div class="subjects" id="subjects"></div>
+  <div class="custom-row" id="custom-row" hidden>
+    <input id="subject-custom" type="text" maxlength="16" placeholder="과목 이름 (예: 정보, 물리학Ⅰ)" autocomplete="off" aria-label="직접 입력한 과목">
+    <button type="button" class="btn-black" id="custom-ok">확인</button>
+  </div>
+</div>
+
+<!-- 공항 확인 -->
+<div class="modal" id="airport-modal" role="dialog" aria-modal="true" aria-labelledby="am-title" hidden>
+  <div class="modal-card">
+    <div class="modal-head">
+      <b id="am-title">공항 확인</b>
+      <button type="button" class="icon-x" id="am-close" aria-label="닫기">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>
+      </button>
+    </div>
+    <div class="am-body">
+      <span class="ychip big" id="am-code">ICN</span>
+      <b id="am-name">인천</b>
+      <span class="hint" id="am-country">대한민국</span>
+    </div>
+    <p class="am-q" id="am-q">이 공항에서 여정을 시작하시겠습니까?</p>
+    <div class="two-btn">
+      <button type="button" class="btn-gray" id="am-cancel">취소</button>
+      <button type="button" class="btn-black" id="am-ok">확인</button>
+    </div>
+  </div>
+</div>
+
+<div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+
+<script src="vendor/d3-array.min.js"></script>
+<script src="vendor/d3-geo.min.js"></script>
+<script src="world.js"></script>
+<script src="world50.js"></script>
+<script src="earth-texture.js"></script>
+<script src="airports.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
