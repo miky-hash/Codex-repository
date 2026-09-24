@@ -12,8 +12,12 @@
 <body data-step="home">
 
 <!-- 배경: 우주 + 지구본 (단계마다 위치·크기가 부드럽게 바뀜) -->
-<canvas id="map" aria-label="지구본 지도. 드래그해서 돌릴 수 있어요." role="img"></canvas>
+<canvas id="map" aria-label="지구본 지도. 끌어서 돌리고, 두 손가락이나 휠로 확대·축소해요." role="img"></canvas>
 <div class="scrim" id="scrim"></div>
+<div class="zoom" id="zoom" role="group" aria-label="지구본 확대·축소">
+  <button type="button" class="round sm" id="zoom-in" aria-label="확대"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/></svg></button>
+  <button type="button" class="round sm" id="zoom-out" aria-label="축소"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/></svg></button>
+</div>
 
 <!-- 상단 -->
 <header class="topbar">
@@ -56,20 +60,16 @@
       <p class="eyebrow">1 / 3 · 소요 시간</p>
       <h2>얼마나 집중할까요?</h2>
     </div>
-    <div class="dial-wrap">
-      <svg id="dial" class="dial" viewBox="0 0 300 300" aria-hidden="true">
-        <circle class="dial-track" cx="150" cy="150" r="118"/>
-        <g id="dial-ticks"></g>
-        <path class="dial-arc" id="dial-arc" d=""/>
-        <circle class="dial-knob" id="dial-knob" cx="150" cy="32" r="17"/>
-      </svg>
-      <div class="dial-center">
-        <b id="dial-value">1:00</b>
-        <span id="dial-sub">1시간</span>
-      </div>
-      <div class="dial-focus" id="dial-slider" role="slider" tabindex="0" aria-label="집중 시간(분)" aria-valuemin="5" aria-valuemax="960" aria-valuenow="60"></div>
+    <div class="hm">
+      <button type="button" class="hm-field" id="hm-h" aria-expanded="false" aria-controls="wd-h" aria-label="시간 고르기"><b id="hm-h-val">1</b><span class="caret" aria-hidden="true"></span></button>
+      <span class="hm-unit">h</span>
+      <button type="button" class="hm-field" id="hm-m" aria-expanded="false" aria-controls="wd-m" aria-label="분 고르기"><b id="hm-m-val">00</b><span class="caret" aria-hidden="true"></span></button>
+      <span class="hm-unit">m</span>
     </div>
-    <p class="hint center">원을 따라 돌리면 한 바퀴에 1시간이에요.</p>
+    <div class="hm-wheels">
+      <div class="wheel-drawer" id="wd-h"><div class="wheel" id="wheel-h"></div></div>
+      <div class="wheel-drawer" id="wd-m"><div class="wheel" id="wheel-m"></div></div>
+    </div>
     <div class="chips center" role="group" aria-label="빠른 선택">
       <button type="button" class="chip" data-quick="25">25분</button>
       <button type="button" class="chip" data-quick="50">50분</button>
@@ -88,19 +88,15 @@
       <h2>어디로 날아갈까요?</h2>
     </div>
     <div class="od">
-      <div class="od-row">
+      <button type="button" class="od-row od-btn" id="od-dep" aria-expanded="false" aria-controls="wd-dep">
         <span class="od-dot">A</span>
-        <div class="od-field">
-          <label for="dep">출발지</label>
-          <select id="dep"></select>
-        </div>
-      </div>
+        <span class="od-field"><span class="od-label">출발지</span><b id="dep-name">ICN · 인천</b></span>
+        <span class="caret" aria-hidden="true"></span>
+      </button>
+      <div class="wheel-drawer" id="wd-dep"><div class="wheel" id="wheel-dep"></div></div>
       <div class="od-row">
         <span class="od-dot">B</span>
-        <div class="od-field">
-          <span class="od-label">도착지</span>
-          <b id="dest-name">-</b>
-        </div>
+        <span class="od-field"><span class="od-label">도착지</span><b id="dest-name">-</b></span>
         <button type="button" class="od-time" id="btn-change-time" aria-label="집중 시간 바꾸기">01:00</button>
       </div>
     </div>
@@ -109,10 +105,11 @@
         <button type="button" id="mode-real" aria-pressed="true">실제 <b id="mode-real-t">00:00</b></button>
         <button type="button" id="mode-mine" aria-pressed="false">내 시간 <b id="mode-mine-t">00:00</b></button>
       </div>
-      <select id="aircraft" aria-label="기종"></select>
+      <button type="button" class="pill-btn" id="ac-btn" aria-expanded="false" aria-controls="wd-ac"><span id="ac-name">A220-300</span><span class="caret" aria-hidden="true"></span></button>
     </div>
+    <div class="wheel-drawer" id="wd-ac"><div class="wheel" id="wheel-ac"></div><p class="hint center" id="ac-next"></p></div>
     <p class="hint" id="route-note"></p>
-    <div class="cards" id="cards" role="listbox" aria-label="도착지 후보"></div>
+    <div class="dest-list" id="cards" role="listbox" aria-label="도착지 후보"></div>
     <button type="button" class="btn-black" id="btn-go">GO!</button>
   </div>
 
@@ -143,10 +140,10 @@
       <div><dt>Distance</dt><dd id="p-km">0km</dd></div>
       <div><dt>Date</dt><dd id="p-date">-</dd></div>
     </dl>
-    <div class="perf" aria-hidden="true"></div>
-    <div class="stub" id="stub" title="아래로 끌어서 찢기">
+    <div class="perf" id="perf" aria-hidden="true"><span class="perf-cut" id="perf-cut"></span></div>
+    <div class="stub" id="stub">
       <div class="barcode" id="barcode"></div>
-      <span class="stub-hint">아래로 끌어서 찢기</span>
+      <span class="stub-hint">✂ 절취선을 따라 긋거나 바코드를 끌어내려요</span>
     </div>
   </div>
 
@@ -274,7 +271,7 @@
 <!-- 탑승권 옆 버튼 -->
 <div class="side-action" id="side-action">
   <button type="button" class="btn-black big" id="btn-board">탑승하기</button>
-  <p class="side-hint">탑승권 아래쪽 바코드를 끌어내려 찢어도 탑승해요.</p>
+  <p class="side-hint">절취선을 손가락으로 따라 그어도 찢어지고 탑승해요.</p>
 </div>
 
 <!-- 과목 고르기 (아래에서 올라오는 시트) -->
