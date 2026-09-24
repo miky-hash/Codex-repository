@@ -241,6 +241,9 @@
     let gl = null;
     try { gl = canvas.getContext('webgl', { alpha: true, premultipliedAlpha: true, antialias: false }); } catch (e) { gl = null; }
     if (!gl) return null;
+    // 조각 셰이더 정밀도가 낮은 기기에서는 위성 사진이 네모 조각처럼 깨져 보이므로 내장 단색 지도를 씀
+    const hp = gl.getShaderPrecisionFormat && gl.getShaderPrecisionFormat(gl.FRAGMENT_SHADER, gl.HIGH_FLOAT);
+    if (!hp || hp.precision < 20) return null;
     const vs = 'attribute vec2 p; void main() { gl_Position = vec4(p, 0.0, 1.0); }';
     const fs = `precision highp float;
       uniform sampler2D tex; uniform vec2 c; uniform float R; uniform float lam0; uniform float phi0;
