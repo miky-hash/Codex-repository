@@ -49,7 +49,21 @@ button { cursor: pointer; }
 /* ---------- 배경 ---------- */
 /* 지구본은 세 겹: 별 하늘(sky) → 위성 사진 지구(earth, WebGL) → 항로·칩·비행기(map) */
 #sky, #earth, #map { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
-#sky, #earth { pointer-events: none; z-index: 0; }
+#sky, #earth, #mlmap { pointer-events: none; z-index: 0; }
+#mlmap { position: fixed; inset: 0; opacity: 0; transition: opacity 600ms var(--ease); }
+#mlmap.on { opacity: 1; }
+#mlmap .maplibregl-canvas { outline: none; }
+.attrib { position: fixed; z-index: 8; left: 50%; bottom: 2px; transform: translateX(-50%); margin: 0; max-width: calc(100% - 32px); font-size: 10px; color: rgba(255,255,255,0.55); text-align: center; pointer-events: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* 지도 종류 고르기 */
+.map-menu { position: fixed; z-index: 13; display: grid; grid-auto-flow: column; gap: 8px; padding: 8px; border-radius: 22px; background: var(--white); box-shadow: var(--shadow); }
+.map-menu button { display: grid; justify-items: center; gap: 6px; border: 0; background: transparent; border-radius: 16px; padding: 6px 6px 8px; font-size: 13px; font-weight: 700; color: var(--muted); }
+.map-menu button[aria-pressed="true"] { color: var(--ink); }
+.map-thumb { width: 64px; height: 48px; border-radius: 12px; box-shadow: inset 0 0 0 2.5px transparent; transition: box-shadow 260ms var(--ease); }
+.map-menu button[aria-pressed="true"] .map-thumb { box-shadow: inset 0 0 0 3px var(--ink), 0 0 0 2px var(--yellow); }
+.t-normal { background: linear-gradient(135deg, #F2EFE9 0 45%, #AAD3DF 45% 60%, #F2EFE9 60%), #F2EFE9; }
+.t-satellite { background: linear-gradient(135deg, #2E4A27 0 40%, #1B3A5C 40% 70%, #5B4B32 70%), #1B3A5C; }
+.t-terrain { background: linear-gradient(135deg, #DCE3C8 0 35%, #B8A98A 35% 55%, #E8E4D6 55% 80%, #AAD3DF 80%), #DCE3C8; }
 #map { touch-action: none; z-index: 0; }
 .scrim {
   position: fixed; inset: 0; z-index: 1; background: #E7E7EA;
