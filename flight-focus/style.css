@@ -112,7 +112,7 @@ body[data-step="flight"] .dock { left: 8px; right: 8px; bottom: calc(8px + env(s
 body[data-step="log"] .dock { left: 8px; right: 8px; top: calc(84px + env(safe-area-inset-top, 0px)); bottom: calc(8px + env(safe-area-inset-bottom, 0px)); }
 
 /* 넓은 가로 화면(태블릿·PC) */
-@media (min-width: 900px) and (min-aspect-ratio: 1/1) {
+@media (min-width: 640px) and (min-aspect-ratio: 1/1) {
   body[data-step="home"] .dock { left: calc(50% - min(280px, 30vw)); right: auto; width: min(560px, 60vw); bottom: calc(32px + env(safe-area-inset-bottom, 0px)); height: 66px; border-radius: 33px; }
   body[data-step="time"] .dock,
   body[data-step="route"] .dock,
@@ -180,7 +180,7 @@ body[data-step="log"] .dock { left: 8px; right: 8px; top: calc(84px + env(safe-a
   padding: 12px 14px; border-radius: 18px; background: var(--gray-2); font-size: 14px;
 }
 .best .hint { font-size: 12px; }
-.pane-time .btn-black, .pane-route .btn-black { margin-top: auto; flex: none; }
+.pane-time .btn-black, .pane-route .btn-black { margin-top: auto; flex: none; position: sticky; bottom: 0; box-shadow: 0 0 0 8px var(--white); }
 
 /* ---------- 2. 출발지 / 도착지 ---------- */
 .od { display: grid; border-radius: 20px; background: var(--gray-2); }
@@ -278,7 +278,7 @@ body[data-step="log"] .dock { left: 8px; right: 8px; top: calc(84px + env(safe-a
 }
 .side-hint { color: var(--muted); font-size: 13px; text-align: center; }
 body:not([data-step="pass"]) .side-action { opacity: 0; transform: translateY(16px); pointer-events: none; visibility: hidden; }
-@media (min-width: 900px) and (min-aspect-ratio: 1/1) {
+@media (min-width: 640px) and (min-aspect-ratio: 1/1) {
   .side-action { left: calc(50% + 40px); right: auto; width: min(440px, 38vw); bottom: auto; top: calc(50% - 60px); }
 }
 
@@ -297,7 +297,7 @@ body:not([data-step="flight"]) .phases { opacity: 0; transform: translateY(-16px
 .phase.is-done::before { background: var(--ink); }
 .phase.is-now { color: var(--ink); }
 .phase.is-now::before { background: var(--yellow); }
-@media (min-width: 900px) and (min-aspect-ratio: 1/1) { .phases { top: 24px; } }
+@media (min-width: 640px) and (min-aspect-ratio: 1/1) { .phases { top: 24px; } }
 
 .pane-flight { gap: 14px; }
 .fl-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
@@ -414,6 +414,19 @@ body:not([data-step="flight"]) .phases { opacity: 0; transform: translateY(-16px
   .dial-wrap { width: min(250px, 100%); }
   .dial-center b { font-size: 46px; }
   .round { width: 46px; height: 46px; }
+}
+
+/* 가로로 눕힌 휴대폰처럼 높이가 낮은 화면 */
+@media (min-width: 640px) and (min-aspect-ratio: 1/1) and (max-height: 560px) {
+  .pane { padding: 16px 18px; gap: 10px; }
+  .pane-head h2 { font-size: 20px; }
+  .dial-wrap { width: min(190px, 100%); }
+  .dial-center b { font-size: 38px; }
+  .btn-black, .btn-gray { padding: 12px 18px; }
+  body[data-step="time"] .dock, body[data-step="route"] .dock, body[data-step="arrive"] .dock { top: 12px; bottom: 12px; right: 12px; }
+  body[data-step="flight"] .dock { left: 12px; bottom: 12px; max-height: calc(100% - 100px); }
+  .phases { top: 8px; padding: 6px 10px; }
+  .greet-loc { font-size: 24px; }
 }
 
 @media (prefers-reduced-motion: reduce) {

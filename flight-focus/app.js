@@ -6,7 +6,7 @@
   const AP = Object.fromEntries(AIRPORTS.map((a) => [a.code, a]));
   const HAS_GEO = !!(window.d3 && d3.geoOrthographic && window.WORLD_LAND);
   const REDUCED = !!(window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches);
-  const WIDE = window.matchMedia ? matchMedia('(min-width: 900px) and (min-aspect-ratio: 1/1)') : { matches: true };
+  const WIDE = window.matchMedia ? matchMedia('(min-width: 640px) and (min-aspect-ratio: 1/1)') : { matches: true };
   const BASE_TITLE = document.title;
   const FONT = "'Noto Sans KR', system-ui, sans-serif";
 
@@ -629,6 +629,23 @@
   }
   $('btn-journey').addEventListener('click', () => { depCode = loc; go('time'); });
   $('btn-log').addEventListener('click', () => go('log'));
+
+  // 전체 화면 + (휴대폰이면) 가로 고정. 안 되는 환경이면 안내만 함
+  const root = document.documentElement;
+  const canFull = !!(root.requestFullscreen || root.webkitRequestFullscreen);
+  if (!canFull) $('btn-full').hidden = true;
+  $('btn-full').addEventListener('click', async () => {
+    try {
+      if (document.fullscreenElement || document.webkitFullscreenElement) {
+        await (document.exitFullscreen || document.webkitExitFullscreen).call(document);
+        return;
+      }
+      await (root.requestFullscreen || root.webkitRequestFullscreen).call(root);
+      if (screen.orientation && screen.orientation.lock) screen.orientation.lock('landscape').catch(() => {});
+    } catch (e) {
+      toast('여기서는 전체 화면을 쓸 수 없어요. 링크를 브라우저에서 열어 주세요.');
+    }
+  });
 
   // 공항 확인 모달
   let modalCode = null;
