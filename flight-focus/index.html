@@ -24,6 +24,7 @@
 </div>
 <p class="attrib" id="attrib"></p>
 <div class="zoom" id="zoom" role="group" aria-label="지도 조작">
+  <button type="button" class="round sm" id="btn-follow" aria-pressed="true" aria-label="비행기를 따라가는 중"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2.5 19 20l-7-3.6L5 20Z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg></button>
   <button type="button" class="round sm" id="map-btn" aria-label="지도 종류 바꾸기" aria-expanded="false" aria-controls="map-menu"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 3 8l9 5 9-5-9-5Z M3 12.5l9 5 9-5 M3 17l9 5 9-5" stroke="currentColor" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/></svg></button>
   <button type="button" class="round sm" id="zoom-in" aria-label="확대"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/></svg></button>
   <button type="button" class="round sm" id="zoom-out" aria-label="축소"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/></svg></button>
@@ -158,7 +159,7 @@
       <div><dt>Distance</dt><dd id="p-km">0km</dd></div>
       <div><dt>Date</dt><dd id="p-date">-</dd></div>
     </dl>
-    <div class="perf" id="perf" aria-hidden="true"><span class="perf-cut" id="perf-cut"></span></div>
+    <div class="perf" id="perf" aria-hidden="true"></div>
     <div class="stub" id="stub">
       <div class="barcode" id="barcode"></div>
       <span class="stub-hint">✂ 절취선을 따라 긋거나 바코드를 끌어내려요</span>
@@ -171,9 +172,28 @@
       <span class="ychip" id="f-flight">FA 000</span>
       <b id="f-route">ICN → NRT</b>
       <span class="subj-pill" id="f-subject">공부</span>
+      <button type="button" class="round sm fl-toggle" id="btn-collapse" aria-label="창 줄이기 (필요한 정보만 보기)">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 14h6v6M20 10h-6V4M14 10l7-7M3 21l7-7" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+    </div>
+    <!-- 줄인 창: 남은 시간·거리·단계·진행 막대 + 일시정지 -->
+    <div class="fl-mini" id="fl-mini">
+      <div class="fm-text">
+        <span class="fm-top"><b id="m-route">ICN → NRT</b><span id="m-phase">Gate · 탑승구</span></span>
+        <b class="fm-clock" id="m-remain">00:00</b>
+        <span class="hint" id="m-dist">0 km 남음</span>
+      </div>
+      <button type="button" class="round sm pause-btn" id="btn-pause-mini" aria-pressed="false" aria-label="일시정지">
+        <svg class="i-pause" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14M16 5v14" stroke="currentColor" stroke-width="3" stroke-linecap="round"/></svg>
+        <svg class="i-play" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5.5v13l10.5-6.5Z" fill="currentColor" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg>
+      </button>
+      <button type="button" class="round sm fl-toggle" id="btn-expand" aria-label="창 크게 보기">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+      <div class="bar fm-bar"><div id="m-bar"></div></div>
     </div>
     <div class="fl-big">
-      <div><span class="label">Time remaining</span><b id="f-remain">00:00</b></div>
+      <div><span class="label" id="f-remain-label">Time remaining</span><b id="f-remain">00:00</b></div>
       <div class="ta-r"><span class="label">Distance remaining</span><b id="f-dist">0 km</b></div>
     </div>
     <div class="bar"><div id="f-bar"></div></div>
@@ -189,9 +209,11 @@
       <p class="hint" id="pa-ko"></p>
     </div>
     <div class="controls">
+      <button type="button" class="tbtn strong" id="btn-pause" aria-pressed="false">일시정지</button>
       <button type="button" class="tbtn" id="btn-noise" aria-pressed="false">기내 소음</button>
       <button type="button" class="tbtn" id="btn-voice" aria-pressed="false">방송 음성</button>
       <button type="button" class="tbtn" id="btn-wake" aria-pressed="false">화면 켜두기</button>
+      <button type="button" class="tbtn" id="btn-notify" aria-pressed="false">알림</button>
       <button type="button" class="tbtn danger" id="btn-abort">비행 중단</button>
     </div>
     <div class="confirm" id="abort-confirm" hidden>
@@ -290,7 +312,7 @@
 <!-- 탑승권 옆 버튼 -->
 <div class="side-action" id="side-action">
   <button type="button" class="btn-black big" id="btn-board">탑승하기</button>
-  <p class="side-hint">절취선을 손가락으로 따라 그어도 찢어지고 탑승해요.</p>
+  <p class="side-hint">절취선을 손가락으로 따라 그으면 그은 만큼 찢어져요.</p>
 </div>
 
 <!-- 과목 고르기 (아래에서 올라오는 시트) -->

@@ -113,6 +113,11 @@ body[data-step="home"] .zoom { left: auto; right: 24px; bottom: calc(100px + env
 body[data-step="flight"] .zoom { left: auto; right: 16px; bottom: auto; top: calc(84px + env(safe-area-inset-top, 0px)); }
 body[data-step="time"] .zoom, body[data-step="route"] .zoom, body[data-step="arrive"] .zoom { left: auto; right: 16px; bottom: auto; top: calc(20px + env(safe-area-inset-top, 0px)); }
 body[data-step="pass"] .zoom, body[data-step="log"] .zoom { opacity: 0; pointer-events: none; visibility: hidden; }
+/* 비행기 따라가기: 따라가는 중이면 채운 화살표, 손으로 옮겼으면 빈 화살표 + 노란 테두리 */
+body:not([data-step="flight"]) #btn-follow { display: none; }
+#btn-follow svg { transition: fill 200ms var(--ease); }
+#btn-follow[aria-pressed="true"] svg { fill: currentColor; }
+#btn-follow[aria-pressed="false"] { box-shadow: 0 0 0 3px var(--yellow), 0 4px 16px rgba(0, 0, 0, 0.18); }
 @media (min-width: 640px) and (min-aspect-ratio: 1/1) {
   body[data-step="time"] .zoom, body[data-step="route"] .zoom, body[data-step="arrive"] .zoom { right: auto; left: 24px; top: auto; bottom: 24px; }
   body[data-step="home"] .zoom { bottom: 32px; }
@@ -150,6 +155,7 @@ body[data-step="log"] .dock { left: 8px; right: 8px; top: calc(84px + env(safe-a
   body[data-step="arrive"] .dock { left: auto; right: 24px; top: 24px; bottom: 24px; width: min(500px, 44vw); height: auto; max-height: none; }
   body[data-step="pass"] .dock { left: max(32px, calc(50% - 420px)); top: max(24px, calc(50% - 320px)); width: 380px; max-height: calc(100% - 48px); }
   body[data-step="flight"] .dock { left: 24px; right: auto; bottom: 24px; width: min(460px, 42vw); max-height: calc(100% - 140px); }
+  body[data-step="flight"] .dock.mini { width: min(340px, 42vw); }
   body[data-step="log"] .dock { left: 24px; right: 24px; top: 96px; bottom: 24px; }
 }
 
@@ -165,7 +171,7 @@ button:active { transform: scale(0.97); }
 .btn-black { background: var(--ink); color: var(--white); }
 .btn-gray { background: var(--gray); color: var(--muted); }
 .btn-black:active, .btn-gray:active { transform: scale(0.98); }
-.btn-black:disabled { opacity: 0.35; cursor: not-allowed; }
+.btn-black:disabled { background: #D9D9DE; color: #9A9AA2; cursor: not-allowed; transform: none; }
 .btn-black.big { padding: 22px 28px; font-size: 18px; width: 100%; }
 .danger-bg { background: var(--danger); }
 .danger-text { color: var(--danger); }
@@ -261,6 +267,7 @@ button:active { transform: scale(0.97); }
 .seg button { position: relative; z-index: 1; border: 0; background: transparent; border-radius: 999px; padding: 6px 8px; font-size: 13px; color: var(--muted); white-space: nowrap; transition: color 250ms var(--ease); }
 .seg button[aria-pressed="true"] { color: var(--ink); }
 .seg.is-off { opacity: 0.35; pointer-events: none; }
+.seg button:disabled { color: #B4B4BB; cursor: not-allowed; text-decoration: line-through; text-decoration-thickness: 1.5px; }
 
 /* 도착지 목록을 넓게: 위쪽 설정 접기 */
 .route-top { display: flex; flex-direction: column; gap: 16px; max-height: 1000px; overflow: hidden; flex: none; transition: max-height 480ms var(--ease), opacity 320ms var(--ease), margin 480ms var(--ease); }
@@ -348,10 +355,9 @@ button:active { transform: scale(0.97); }
     radial-gradient(circle at 0 50%, #E7E7EA 12px, transparent 12.5px),
     radial-gradient(circle at 100% 50%, #E7E7EA 12px, transparent 12.5px);
 }
-.perf-cut { position: absolute; top: calc(50% - 1.5px); height: 3px; left: 0; width: 0; background: var(--ink); border-radius: 2px; z-index: 1; }
-/* 찢은 뒤: 절취선이 톱니 모양 끝단이 되고, 아래 빈 공간은 접힘 */
+/* 찢은 뒤: 남은 탑승권은 절취선에서 곧게 끝나고, 아래 빈 공간은 접힘 */
 .perf.torn { height: 17px; cursor: default; }
-.perf.torn::before, .perf.torn::after, .perf.torn .perf-cut { display: none; }
+.perf.torn::before, .perf.torn::after { display: none; }
 .pane-pass:has(.perf.torn) { padding-bottom: 0; }
 .dock.cut { border-bottom-left-radius: 0; border-bottom-right-radius: 0; }
 .stub { position: relative; display: grid; justify-items: center; gap: 6px; padding: 8px 12px 22px; margin-inline: -22px; background: var(--gray-2); cursor: grab; touch-action: none; user-select: none; overflow: hidden; }
@@ -359,7 +365,24 @@ button:active { transform: scale(0.97); }
 .barcode { display: flex; align-items: stretch; gap: 3px; height: 66px; flex: none; }
 .barcode span { background: var(--ink); flex: none; border-radius: 1px; }
 .stub-hint { font-size: 12px; color: var(--muted); text-align: center; }
-.stub-fly { position: fixed; z-index: 30; border-radius: 0 0 30px 30px; box-shadow: 0 16px 30px rgba(0, 0, 0, 0.2); pointer-events: none; }
+/* 떼어 내는 종이 조각: 찢긴 만큼 결이 보이고, 처지면서 그림자가 짙어짐 */
+.tear-piece {
+  --lift: 0;
+  position: fixed; z-index: 30; pointer-events: none;
+  transition: transform 140ms ease-out;
+  filter: drop-shadow(0 calc(2px + var(--lift) * 8px) calc(3px + var(--lift) * 12px) rgba(0, 0, 0, calc(0.1 + var(--lift) * 0.14)));
+}
+.tear-piece.dragging { transition: none; }
+.tear-paper {
+  position: absolute; inset: 0; overflow: hidden; border-radius: 0 0 30px 30px;
+  background:
+    radial-gradient(circle at 0 0, #E7E7EA 12px, transparent 12.5px),
+    radial-gradient(circle at 100% 0, #E7E7EA 12px, transparent 12.5px),
+    var(--gray-2);
+}
+.stub-copy { position: absolute; margin: 0; cursor: default; }
+.tear-shade { position: fixed; z-index: 9; pointer-events: none; border-radius: 30px 30px 0 0; box-shadow: var(--shadow); }
+.tear-dash { position: absolute; top: 0; height: 0; border-top: 2px dashed #BDBDC4; }
 
 .side-action {
   position: fixed; z-index: 11; left: 16px; right: 16px; bottom: calc(16px + env(safe-area-inset-bottom, 0px));
@@ -379,14 +402,17 @@ body:not([data-step="pass"]) .side-action { opacity: 0; transform: translateY(16
   background: var(--white); border-radius: 22px; box-shadow: var(--shadow);
 }
 body:not([data-step="flight"]) .phases { opacity: 0; transform: translateY(-16px); pointer-events: none; visibility: hidden; }
-.phase { display: grid; gap: 4px; font-size: 11px; color: var(--muted); text-align: center; }
-.phase { transition: color 500ms var(--ease); }
-.phase::before { content: ""; height: 5px; border-radius: 3px; background: var(--gray); transition: background-color 700ms var(--ease); }
+.phase { display: grid; gap: 4px; font-size: 11px; color: var(--muted); text-align: center; transition: color 500ms var(--ease); min-width: 0; }
+/* 단계 막대: 지난 만큼 검게 차오름. 지금 단계는 노란 바탕 + 남은 시간 */
+.ph-bar { display: block; height: 6px; border-radius: 3px; background: var(--gray); overflow: hidden; transition: background-color 600ms var(--ease), box-shadow 600ms var(--ease); }
+.ph-bar i { display: block; height: 100%; background: var(--ink); transform-origin: left center; transform: scaleX(0); transition: transform 1s linear; }
 .phase b { font-size: 13px; font-weight: 700; color: inherit; }
+.ph-ko { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .phase.is-done { color: var(--ink); }
-.phase.is-done::before { background: var(--ink); }
 .phase.is-now { color: var(--ink); }
-.phase.is-now::before { background: var(--yellow); }
+.phase.is-now .ph-bar { background: var(--yellow); box-shadow: 0 0 0 2px rgba(255, 212, 59, 0.35); }
+.phase.is-now .ph-ko { font-weight: 700; }
+body.is-paused .phase.is-now .ph-bar { background: var(--gray); box-shadow: none; }
 @media (min-width: 640px) and (min-aspect-ratio: 1/1) { .phases { top: 24px; } }
 
 .pane-flight { gap: 14px; }
@@ -409,6 +435,32 @@ body:not([data-step="flight"]) .phases { opacity: 0; transform: translateY(-16px
 .tbtn { border: 0; border-radius: 999px; background: var(--gray); padding: 9px 14px; font-size: 13px; font-weight: 500; }
 .tbtn[aria-pressed="true"] { background: var(--ink); color: var(--white); }
 .tbtn.danger { color: var(--danger); margin-left: auto; }
+.tbtn.strong { background: var(--ink); color: var(--white); font-weight: 700; }
+.tbtn.strong[aria-pressed="true"] { background: var(--yellow); color: var(--ink); }
+#t-trend { white-space: nowrap; }
+.tele dd { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#t-miles small { display: block; font-weight: 500; line-height: 1.3; } /* 두 줄로 고정: 글자가 바뀌어도 창 높이가 그대로 */
+.fl-head .fl-toggle { flex: none; width: 36px; height: 36px; box-shadow: none; background: var(--gray); }
+.fl-head .fl-toggle svg { width: 18px; height: 18px; }
+.pane-flight.paused #f-remain { color: var(--muted); }
+.pane-flight.paused #f-remain-label { color: var(--ink); font-weight: 700; }
+
+/* 줄인 비행 창 */
+.fl-mini { display: none; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 8px 10px; }
+.pane-flight.mini { padding: 14px 16px; gap: 0; }
+.pane-flight.mini > :not(.fl-mini) { display: none !important; }
+.pane-flight.mini .fl-mini { display: grid; }
+.fm-text { display: grid; min-width: 0; }
+.fm-top { display: flex; gap: 8px; align-items: baseline; font-size: 13px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fm-top b { color: var(--ink); font-size: 13px; }
+.fm-clock { font-size: 30px; font-weight: 700; line-height: 1.1; letter-spacing: -0.02em; }
+.fm-bar { grid-column: 1 / -1; height: 6px; }
+.fl-mini .round.sm { width: 46px; height: 46px; box-shadow: none; background: var(--gray); }
+.pause-btn .i-play { display: none; }
+.pause-btn[aria-pressed="true"] { background: var(--yellow) !important; }
+.pause-btn[aria-pressed="true"] .i-pause { display: none; }
+.pause-btn[aria-pressed="true"] .i-play { display: block; }
+.pane-flight.paused .fm-clock { color: var(--muted); }
 
 /* ---------- 5. 도착 ---------- */
 .pane-arrive { gap: 18px; }
@@ -484,10 +536,12 @@ body:not([data-step="flight"]) .phases { opacity: 0; transform: translateY(-16px
 /* ---------- 토스트 ---------- */
 .toast {
   position: fixed; left: 50%; top: calc(20px + env(safe-area-inset-top, 0px)); transform: translateX(-50%); z-index: 40;
-  max-width: calc(100% - 32px); background: var(--ink); color: var(--white);
-  padding: 12px 18px; border-radius: 999px; font-size: 14px; box-shadow: var(--shadow);
+  width: max-content; max-width: min(560px, calc(100% - 32px)); background: var(--ink); color: var(--white); text-align: center;
+  padding: 12px 18px; border-radius: 22px; font-size: 14px; box-shadow: var(--shadow);
   animation: fade-in 200ms var(--ease);
 }
+
+body[data-step="flight"] .toast { top: calc(96px + env(safe-area-inset-top, 0px)); }
 
 /* ---------- 좁은 화면 보정 ---------- */
 @media (max-width: 560px) {
@@ -501,6 +555,8 @@ body:not([data-step="flight"]) .phases { opacity: 0; transform: translateY(-16px
   .log-cols { grid-template-columns: minmax(0, 1fr); }
   .phase { font-size: 0; }
   .phase b { font-size: 11px; }
+  .phase.is-now .ph-ko { font-size: 10px; }
+  .phases { gap: 5px; padding: 8px 10px; }
   .hm-field { min-width: 96px; padding: 12px 16px; }
   .hm-field b { font-size: 36px; }
   .round { width: 46px; height: 46px; }

@@ -156,6 +156,7 @@
     const stepClimb = T > 360;
     const topAlt = cruiseAlt + (stepClimb ? 4000 : 0);
     const prof = {
+      bounds: [0, b[0], b[1], b[2], b[3], 1], // 단계마다 시작·끝 (진행률)
       phase(p) { return p < b[0] ? 0 : p < b[1] ? 1 : p < b[2] ? 2 : p < b[3] ? 3 : 4; },
       frac(p) {
         p = clamp(p, 0, 1);
@@ -193,7 +194,7 @@
   if (flight && (!AP[flight.from] || !AP[flight.to] || !(flight.endAt > flight.startAt) || !ACMAP[flight.aircraft])) {
     flight = null; store.del('flight');
   }
-  const prefs = Object.assign({ minutes: 60, subject: '공부', custom: '', aircraft: 'A220', voice: true, mapStyle: 'satellite' }, store.get('prefs', {}));
+  const prefs = Object.assign({ minutes: 60, subject: '공부', custom: '', aircraft: 'A220', voice: true, mapStyle: 'satellite', notify: true, flightMini: false }, store.get('prefs', {}));
   if (!prefs.voiceV2) { prefs.voice = true; prefs.voiceV2 = true; } // 새 방송 음성은 기본으로 켬
   if (!SUBJECTS.some((s) => s.n === prefs.subject)) prefs.subject = '공부';
   const savePrefs = () => store.set('prefs', prefs);
@@ -486,8 +487,22 @@
   }
   function kick() { if (!raf) raf = requestAnimationFrame(frame); }
   const builtinSat = () => !tilesOn() && mapMode() === 'satellite' && satellite();
+  // 비행기가 화면에서 1초에 몇 픽셀 움직이는지: 느리면 0.2초마다, 빠르면(확대했을 때) 매 프레임 그림
+  function planePxPerSec() {
+    if (!flight || flight.pausedAt) return 0;
+    const kmh = profileOf(flight).speed(progressOf(flight, Date.now()));
+    return kmh / 3600 * (apparentR() / 6371);
+  }
   function frame(now) {
     raf = 0;
+    const flying = step === 'flight' && !!flight;
+    if (flying) {
+      flightGeometry();
+      if (following) { // 비행기 따라가기: 목표 자리를 매 프레임 새로 계산
+        const v = viewFor('flight', dockRect());
+        if (tween) tween.to = v; else Object.assign(view, v);
+      }
+    }
     if (tween) {
       const t = Math.min(1, (now - tween.t0) / tween.dur);
       Object.assign(view, lerpView(tween.from, tween.to, ease(t)));
@@ -500,7 +515,7 @@
       if (on) globeGL.render();
     }
     draw(now);
-    if (tween || (scene.pop && now - scene.pop.t0 < 420)) kick();
+    if (tween || (scene.pop && now - scene.pop.t0 < 420) || (flying && planePxPerSec() > 1.5)) kick();
   }
 
   function roundRect(x, y, w, h, r) {
@@ -878,12 +893,12 @@
   // 지구본: 한 손가락(마우스)으로 돌리기, 두 손가락·휠·버튼으로 확대·축소, 공항 칩 누르기
   let gdrag = null, pinch = null;
   const pts = new Map();
-  const canTouchGlobe = () => ['home', 'time', 'route', 'arrive'].includes(step);
+  const canTouchGlobe = () => ['home', 'time', 'route', 'flight', 'arrive'].includes(step);
   const canZoom = () => HAS_GEO && step !== 'pass' && step !== 'log';
   function zoomBy(f) {
     if (!canZoom()) return;
     zoomMul = clamp(zoomMul * f, 0.4, maxZoom() / 2);
-    if (step === 'flight') { follow(viewFor('flight', dock.getBoundingClientRect())); return; }
+    if (step === 'flight' && following) { follow(viewFor('flight', dockRect())); return; }
     if (tween) { tween.to.zoom = clamp(tween.to.zoom * f, 0.4, maxZoom()); return; }
     view.zoom = clamp(view.zoom * f, 0.4, maxZoom());
     kick();
@@ -915,6 +930,7 @@
     }
     const dx = e.clientX - gdrag.x, dy = e.clientY - gdrag.y;
     if (!gdrag.moved && Math.hypot(dx, dy) < 6) return;
+    if (!gdrag.moved && step === 'flight' && following) setFollowing(false); // 손으로 움직이면 따라가기를 멈춤
     gdrag.moved = true;
     tween = null;
     const k = 180 / Math.PI / (tilesOn() ? worldR() : view.r * view.zoom);
@@ -971,12 +987,30 @@
   // 버튼 확대는 한 번에 바뀌지 않고 부드럽게
   function zoomSmooth(f) {
     if (!canZoom()) return;
-    if (step === 'flight') { zoomMul = clamp(zoomMul * f, 0.4, maxZoom() / 2); flyTo(viewFor('flight', dock.getBoundingClientRect()), 450); return; }
+    if (step === 'flight' && following) { zoomMul = clamp(zoomMul * f, 0.4, maxZoom() / 2); flyTo(viewFor('flight', dockRect()), 450); return; }
     zoomMul = clamp(zoomMul * f, 0.4, maxZoom() / 2);
     const target = Object.assign({}, tween ? tween.to : view);
     target.zoom = clamp(target.zoom * f, 0.4, maxZoom());
     flyTo(target, 450);
   }
+  // 비행 중 지도를 손으로 옮기면 따라가기가 꺼지고, 이 버튼을 누르면 다시 비행기를 따라감 (실제 지도 앱처럼)
+  let following = true;
+  function setFollowing(on) {
+    following = on;
+    const b = $('btn-follow');
+    b.setAttribute('aria-pressed', String(on));
+    b.setAttribute('aria-label', on ? '비행기를 따라가는 중' : '비행기 따라가기');
+  }
+  $('btn-follow').addEventListener('click', () => {
+    if (step !== 'flight' || !flight) return;
+    if (!following) { // 지금 확대 배율은 그대로 두고 비행기 쪽으로 돌아감
+      zoomMul = 1;
+      const base = viewFor('flight', dockRect()).zoom;
+      zoomMul = clamp(view.zoom / base, 0.4, maxZoom() / 2);
+    }
+    setFollowing(true);
+    flyTo(viewFor('flight', dockRect()), 800);
+  });
   const chipAt = (x, y) => chipHits.find((c) => x >= c.x && x <= c.x + c.w && y >= c.y && y <= c.y + c.h);
   function onChipTap(code) {
     if (step === 'home') selectHome(code);
@@ -988,15 +1022,19 @@
   const PANES = [...document.querySelectorAll('.pane')];
   let morphUntil = 0;
   let lastDock = null;
+  // 박스가 모양을 바꾸는 중에는 움직이는 도중의 크기가 아니라 도착할 자리를 기준으로 삼음 (지구본이 흔들리지 않게)
+  const dockRect = () => (lastDock && performance.now() < morphUntil ? lastDock : dock.getBoundingClientRect());
 
   function go(next, instant, slow) {
     if (!$('map-menu').hidden) toggleMapMenu(false);
     zoomMul = 1;
+    setFollowing(true);
     closeDrawers();
     const first = dock.getBoundingClientRect();
     const cs1 = getComputedStyle(dock);
     const r1 = [cs1.borderTopLeftRadius, cs1.borderTopRightRadius, cs1.borderBottomRightRadius, cs1.borderBottomLeftRadius].join(' ');
     if (next !== 'pass') dock.classList.remove('cut');
+    if (step === 'pass' && next !== 'pass' && !boarding) resetTear(); // 찢다 만 탑승권 조각 치우기
     const bg1 = cs1.backgroundColor, rad1 = r1;
     step = next;
     document.body.dataset.step = next;
@@ -1041,6 +1079,8 @@
       if (lastDock && Math.abs(r.width - lastDock.width) < 4 && Math.abs(r.height - lastDock.height) < 4
         && Math.abs(r.top - lastDock.top) < 4 && Math.abs(r.left - lastDock.left) < 4) return;
       lastDock = r;
+      if (step === 'flight' && !following) return; // 손으로 옮겨 둔 지도는 그대로
+      if (step === 'pass') return; // 탑승권을 찢을 때 박스가 줄어도 지구본은 그대로
       flyTo(viewFor(step, r), 320);
     }).observe(dock);
   }
@@ -1048,6 +1088,7 @@
     resizeCanvas();
     const r = dock.getBoundingClientRect();
     lastDock = r;
+    if (step === 'flight' && !following) { kick(); return; }
     flyTo(viewFor(step, r), 0);
   });
 
@@ -1125,23 +1166,28 @@
     homeSel = loc;
     const h = new Date().getHours();
     $('greet-hi').textContent = h < 5 ? '늦은 밤이에요' : h < 11 ? '좋은 아침이에요' : h < 17 ? '좋은 오후예요' : h < 22 ? '좋은 저녁이에요' : '늦은 밤이에요';
-    const a = AP[loc];
-    $('greet-loc').textContent = `${a.city}, ${a.country}`;
+    renderHomeLoc(false);
     const today = dayKey(new Date());
     const todayMin = log.filter((e) => dayKey(new Date(e.landedAt || e.date)) === today).reduce((s, e) => s + (e.focusedMin || 0), 0);
     $('g-today').textContent = `오늘 ${fmtDur(todayMin)} 집중`;
     $('g-streak').textContent = `연속 ${streaks().current}일`;
     fillAircraft();
     $('plane-pill').textContent = `${acShort(prefs.aircraft)} · ${fmtNum(totalMiles())} mi`;
-    setText('journey-label', homeSel === loc ? '여정 시작' : `${homeSel}에서 여정 시작`);
+  }
+  // 왼쪽 위 위치와 아래 버튼: 지금 고른(노란) 공항을 이름과 코드로 보여 줌
+  function renderHomeLoc(animate) {
+    const a = AP[homeSel];
+    const put = animate ? setText : (id, t) => { $(id).textContent = t; };
+    put('greet-loc', `${a.city}, ${a.country}`);
+    put('journey-label', `${a.city}(${a.code})에서 여정 시작`);
   }
   // 공항 칩을 누르면: 그 공항이 노랗게 되고 지구본이 그쪽으로 돌아감 (확인은 출발 버튼에서)
   function selectHome(code) {
     homeSel = code;
     scene.pop = { code, t0: performance.now() };
     updateScene();
-    flyTo(viewFor('home', dock.getBoundingClientRect()), 900);
-    setText('journey-label', homeSel === loc ? '여정 시작' : `${homeSel}에서 여정 시작`);
+    flyTo(viewFor('home', dockRect()), 900);
+    renderHomeLoc(true);
   }
   $('btn-journey').addEventListener('click', () => openAirportModal(homeSel));
   $('btn-log').addEventListener('click', () => go('log'));
@@ -1260,9 +1306,7 @@
   wheelM.setItems(Array.from({ length: 12 }, (_, i) => ({ v: i * 5, t: pad(i * 5) })), prefs.minutes % 60);
   function setHM(h, m) {
     const h0 = Math.floor(prefs.minutes / 60), m0 = prefs.minutes % 60;
-    let total = (h === null ? h0 : h) * 60 + (m === null ? m0 : m);
-    if (total < 5) { total = 5; wheelM.set(5); } // 0시간 0분은 안 됨
-    prefs.minutes = total;
+    prefs.minutes = (h === null ? h0 : h) * 60 + (m === null ? m0 : m); // 0시간 0분이면 다음 버튼만 막음
     savePrefs();
     renderTimeText();
   }
@@ -1271,6 +1315,8 @@
     setText('hm-h-val', String(Math.floor(m / 60)));
     setText('hm-m-val', pad(m % 60));
     document.querySelectorAll('[data-quick]').forEach((b) => b.setAttribute('aria-pressed', String(Number(b.dataset.quick) === m)));
+    $('btn-to-route').disabled = m <= 0;
+    if (m <= 0) { setHTML('time-best', '<span class="hint">0시간 0분으로는 떠날 수 없어요. 시간을 골라 주세요.</span>'); return; }
     const best = routes()[0];
     setHTML('time-best', best
       ? `<span><span class="hint">가장 가까운 항공편</span><br><b>${depCode} → ${best.a.code}</b> ${esc(best.a.city)}</span><span class="ychip">${fmtHm(best.min)}</span>`
@@ -1289,7 +1335,7 @@
   $('hm-h').addEventListener('click', () => toggleDrawer('wd-h', $('hm-h'), wheelH, () => Math.floor(prefs.minutes / 60)));
   $('hm-m').addEventListener('click', () => toggleDrawer('wd-m', $('hm-m'), wheelM, () => prefs.minutes % 60));
   document.querySelectorAll('[data-quick]').forEach((b) => b.addEventListener('click', () => setMinutes(Number(b.dataset.quick))));
-  $('btn-to-route').addEventListener('click', () => go('route'));
+  $('btn-to-route').addEventListener('click', () => { if (prefs.minutes > 0) go('route'); });
 
   // ---------- 2. 출발지 / 도착지 ----------
   function routes() {
@@ -1301,6 +1347,9 @@
       .map((x) => Object.assign(x, { diff: x.min - prefs.minutes }))
       .sort((x, y) => Math.abs(x.diff) - Math.abs(y.diff) || x.km - y.km);
   }
+  // 내 시간으로 날 때 속도는 실제의 0.5배~2배까지만 (그 밖은 비현실적이라 막음)
+  const SPEED_MAX = 2, SPEED_MIN = 0.5;
+  const mineOk = (x) => x.min / prefs.minutes <= SPEED_MAX && x.min / prefs.minutes >= SPEED_MIN;
   const selected = () => (sel.to ? routes().find((x) => x.a.code === sel.to) || null : null);
   function pickBest() {
     const rs = routes();
@@ -1320,7 +1369,7 @@
     depCode = loc = code; store.set('loc', loc);
     pickBest(); selKey = depCode + ':' + prefs.minutes; showFar = false;
     renderRoute(); updateScene();
-    flyTo(viewFor('route', dock.getBoundingClientRect()), 800);
+    flyTo(viewFor('route', dockRect()), 800);
   });
   const wheelAc = makeWheel($('wheel-ac'), '기종', (id) => {
     const ac = ACMAP[id];
@@ -1391,7 +1440,10 @@
     if (!x) { setText('dest-name', '-'); setText('route-note', ''); return; }
     setText('dest-name', `${x.a.code} · ${x.a.city}`);
     const same = x.diff === 0;
-    if (same) sel.mode = 'real';
+    const blocked = !same && !mineOk(x);
+    if (same || blocked) sel.mode = 'real';
+    $('mode-mine').disabled = blocked;
+    $('mode-seg').classList.toggle('mine-blocked', blocked);
     $('mode-seg').classList.toggle('is-off', same);
     $('mode-seg').dataset.mode = sel.mode; // 흰 손잡이가 미끄러지듯 이동
     setText('mode-real-t', fmtHHMM(x.min));
@@ -1405,6 +1457,10 @@
     if (sel.mode === 'real') {
       note = same ? '정한 집중 시간과 실제 비행시간이 같아요.'
         : `실제 비행시간 ${fmtHHMM(x.min)} 동안 날아요. 정한 시간보다 ${fmtDur(Math.abs(x.diff))} ${x.diff > 0 ? '길어요' : '짧아요'}.`;
+      if (blocked) {
+        const fast = x.min > prefs.minutes;
+        note += ` 내 시간(${fmtHHMM(prefs.minutes)})으로 가려면 실제보다 ${fast ? `${fmtNum((x.min / prefs.minutes - 1) * 100)}% 빠르게` : `${fmtNum((1 - x.min / prefs.minutes) * 100)}% 느리게`} 날아야 해서 고를 수 없어요. 내 시간은 실제의 절반~2배 속도까지만 돼요.`;
+      }
     } else {
       const pct = Math.round((x.min / prefs.minutes - 1) * 100);
       note = Math.abs(pct) < 3 ? '실제와 거의 같은 속도로 날아요.'
@@ -1419,7 +1475,7 @@
     if (card) card.scrollIntoView({ block: 'nearest', behavior: REDUCED ? 'auto' : 'smooth' });
     renderRouteSummary();
     updateScene();
-    flyTo(viewFor('route', dock.getBoundingClientRect()), 700);
+    flyTo(viewFor('route', dockRect()), 700);
   }
   // 위쪽 설정 접기·펼치기: 막대를 위로 밀면 요약 한 줄 + 넓은 도착지 목록
   const routePane = document.querySelector('.pane-route');
@@ -1456,7 +1512,7 @@
     if (c) selectDest(c.dataset.code);
   });
   $('mode-real').addEventListener('click', () => { sel.mode = 'real'; renderRouteSummary(); });
-  $('mode-mine').addEventListener('click', () => { sel.mode = 'mine'; renderRouteSummary(); });
+  $('mode-mine').addEventListener('click', () => { const x = selected(); if (x && mineOk(x)) { sel.mode = 'mine'; renderRouteSummary(); } });
   $('btn-change-time').addEventListener('click', () => go('time'));
   $('btn-go').addEventListener('click', () => { if (selected()) openSheet(); });
 
@@ -1541,81 +1597,191 @@
   }
 
   // ---------- 탑승권 찢기 ----------
-  // ① 절취선을 손가락으로 따라 긋기(가로 80% 이상)  ② 바코드를 아래로 끌기  ③ 탑승하기 버튼
-  let boarding = false, fly = null, gesture = null;
-  const stub = $('stub'), perf = $('perf'), cut = $('perf-cut');
+  // ① 절취선을 손가락으로 따라 긋기: 그은 만큼 실제로 찢어지고, 한쪽 끝부터 찢으면 찢긴 쪽이 아래로 처지며 벌어짐.
+  //    손을 떼도 찢긴 곳은 그대로 남고, 가로 80%를 넘기면 나머지가 저절로 찢어짐
+  // ② 바코드를 아래로 끌기  ③ 탑승하기 버튼(왼쪽부터 빠르게 찢어짐)
+  let boarding = false, gesture = null, piece = null;
+  const stub = $('stub'), perf = $('perf');
   const passPane = document.querySelector('.pane-pass');
+  const TEAR_TILT = 7; // 찢긴 쪽이 처지는 최대 각도(도)
   stub.tabIndex = 0;
   stub.setAttribute('role', 'button');
   stub.setAttribute('aria-label', '탑승권을 찢고 탑승하기');
+  // 박스를 원래대로 (잘라 둔 곳·옮긴 그림자 되돌리기)
+  function restoreDock(pc) {
+    dock.style.clipPath = '';
+    dock.style.boxShadow = '';
+    if (pc && pc.shade) pc.shade.remove();
+  }
   function resetTear() {
-    boarding = false; gesture = null; fly = null;
-    stub.style.visibility = ''; stub.style.height = ''; stub.classList.remove('gone');
+    boarding = false; gesture = null;
+    if (piece) { piece.wrap.remove(); restoreDock(piece); piece = null; }
+    restoreDock(null);
+    stub.classList.remove('gone');
     dock.classList.remove('cut');
     perf.classList.remove('torn');
-    cut.style.transition = ''; cut.style.left = '0px'; cut.style.width = '0px';
     $('btn-board').disabled = false; $('btn-board').textContent = '탑승하기';
   }
-  function makeFly() {
-    const r = stub.getBoundingClientRect();
-    const c = stub.cloneNode(true);
-    c.removeAttribute('id'); c.removeAttribute('tabindex'); c.removeAttribute('role');
-    c.classList.add('stub-fly');
-    Object.assign(c.style, { left: r.left + 'px', top: r.top + 'px', width: r.width + 'px', height: r.height + 'px', margin: '0' });
-    document.body.appendChild(c);
-    stub.style.visibility = 'hidden';
-    return c;
+  // 절취선 아래(바코드 쪽)를 떼어 낼 종이 조각으로 복사하고, 박스는 절취선 아래를 잘라 안 보이게 함 (크기는 그대로)
+  function makePiece() {
+    const pr = perf.getBoundingClientRect(), dr = dock.getBoundingClientRect(), sr = stub.getBoundingClientRect();
+    const lineY = Math.round(pr.top + pr.height / 2);
+    const w = dr.width, h = Math.max(24, Math.min(dr.bottom, sr.bottom) - lineY);
+    const wrap = document.createElement('div');
+    wrap.className = 'tear-piece';
+    Object.assign(wrap.style, { left: dr.left + 'px', top: lineY + 'px', width: w + 'px', height: h + 'px' });
+    const paper = document.createElement('div');
+    paper.className = 'tear-paper';
+    const copy = stub.cloneNode(true);
+    ['id', 'tabindex', 'role', 'aria-label'].forEach((a) => copy.removeAttribute(a));
+    copy.className = 'stub stub-copy';
+    Object.assign(copy.style, { left: (sr.left - dr.left) + 'px', top: (sr.top - lineY) + 'px', width: sr.width + 'px', height: sr.height + 'px' });
+    const dashL = document.createElement('span'), dashR = document.createElement('span');
+    dashL.className = dashR.className = 'tear-dash';
+    paper.append(copy, dashL, dashR);
+    wrap.appendChild(paper);
+    document.body.appendChild(wrap);
+    // 박스 그림자는 위쪽 조각 모양의 그림자 판으로 옮김 (찢긴 틈에도 위 조각의 그림자가 드리움)
+    const shade = document.createElement('div');
+    shade.className = 'tear-shade';
+    Object.assign(shade.style, { left: dr.left + 'px', top: dr.top + 'px', width: dr.width + 'px', height: (lineY - dr.top) + 'px' });
+    document.body.appendChild(shade);
+    dock.style.boxShadow = 'none';
+    const r = rng(hash(pending ? pending.flightNo + Date.now() : String(Date.now())));
+    const n = Math.ceil(w / 4) + 2;
+    const pc = {
+      wrap, paper, dashL, dashR, shade, w, h, lineY, dockTop: dr.top, dockH: dr.height, dockW: dr.width,
+      a: 0, b: 0, dy: 0, free: false, rot: 0, ox: 0,
+      jagLo: Array.from({ length: n }, () => r()), jagUp: Array.from({ length: n }, () => r()),
+    };
+    renderPiece(pc);
+    return pc;
   }
-  passPane.addEventListener('pointerdown', (e) => {
-    if (!pending || boarding) return;
-    const pr = perf.getBoundingClientRect(), sr = stub.getBoundingClientRect();
-    const lineY = pr.top + pr.height / 2;
-    if (Math.abs(e.clientY - lineY) <= 34 && e.clientX >= pr.left - 10 && e.clientX <= pr.right + 10) {
-      gesture = { kind: 'trace', lineY, left: pr.left, width: pr.width, min: e.clientX, max: e.clientX };
-    } else if (e.clientY >= sr.top && e.clientY <= sr.bottom) {
+  // 찢긴 구간 [a, b]: 두 조각의 가장자리를 종이 결처럼 들쭉날쭉하게 자르고, 한쪽 끝부터 찢겼으면 찢긴 끝을 축으로 처지게 함
+  function renderPiece(pc) {
+    const w = pc.w, a = clamp(pc.a, 0, w), b = clamp(pc.b, 0, w);
+    const torn = b - a;
+    const inTear = (x) => torn > 0.5 && x >= a - 1 && x <= b + 1;
+    const lo = [], up = [];
+    for (let x = 0, i = 0; x <= w + 3; x += 4, i++) {
+      const xx = Math.min(x, w);
+      lo.push(`${xx}px ${inTear(xx) ? (0.6 + pc.jagLo[i] * 2.6).toFixed(1) : 0}px`);
+      up.push(`${xx}px ${inTear(xx) ? (-0.4 - pc.jagUp[i] * 1.8).toFixed(1) : 0}px`);
+    }
+    pc.paper.style.clipPath = `polygon(${lo.join(',')},${w}px ${pc.h + 60}px,0px ${pc.h + 60}px)`;
+    // 위쪽 박스: 절취선에서 잘리고, 찢긴 구간은 위 조각 쪽 결도 들쭉날쭉
+    const top = pc.lineY - pc.dockTop;
+    const upPts = up.map((s) => { const [x, y] = s.split(' ').map(parseFloat); return `${x}px ${(top + y).toFixed(1)}px`; }).reverse();
+    dock.style.clipPath = `polygon(-2px -2px,${pc.dockW + 2}px -2px,${pc.dockW + 2}px ${top}px,${upPts.join(',')},-2px ${top}px)`;
+    // 아직 붙어 있는 곳에만 점선이 남음
+    const dash = (el, x0, x1) => { el.style.left = x0 + 'px'; el.style.width = Math.max(0, x1 - x0) + 'px'; };
+    if (torn > 0.5) { dash(pc.dashL, 20, a); dash(pc.dashR, b, w - 20); } else { dash(pc.dashL, 20, w - 20); dash(pc.dashR, 0, 0); }
+    let rot = 0, ox = w / 2;
+    if (pc.free) rot = pc.rot;
+    else if (a <= w * 0.06 && b < w * 0.97) { ox = b; rot = -TEAR_TILT * torn / w; } // 왼쪽부터 찢김 → 왼쪽이 처짐
+    else if (b >= w * 0.94 && a > w * 0.03) { ox = a; rot = TEAR_TILT * torn / w; } // 오른쪽부터 찢김 → 오른쪽이 처짐
+    if (!pc.free) { pc.rot = rot; pc.ox = ox; }
+    pc.wrap.style.transformOrigin = `${pc.ox}px 0px`;
+    pc.wrap.style.transform = `translateY(${pc.dy.toFixed(1)}px) rotate(${pc.rot.toFixed(2)}deg)`;
+    pc.wrap.style.setProperty('--lift', clamp(torn / w + pc.dy / 80, 0, 1).toFixed(2));
+  }
+
+  // 종이 찢어지는 소리: 찢은 길이만큼 짧은 '지직' 소리 알갱이를 냄
+  let ripBuf = null, lastRip = 0, ripDebt = 0;
+  function ripSound(px) {
+    const c = actx;
+    if (!c || c.state !== 'running' || !(px > 0)) return;
+    ripDebt += px;
+    const now = c.currentTime;
+    if (now - lastRip < 0.022 || ripDebt < 2) return;
+    lastRip = now;
+    if (!ripBuf) {
+      ripBuf = c.createBuffer(1, c.sampleRate, c.sampleRate);
+      const d = ripBuf.getChannelData(0);
+      for (let i = 0; i < d.length; i++) d[i] = (Math.random() * 2 - 1) * (Math.random() < 0.07 ? 1 : 0.16); // 지직거리는 결
+    }
+    const src = c.createBufferSource();
+    src.buffer = ripBuf;
+    const bp = c.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 1300 + Math.random() * 2800; bp.Q.value = 0.8;
+    const g = c.createGain();
+    const amp = clamp(ripDebt / 28, 0.06, 0.55), dur = 0.03 + Math.random() * 0.05;
+    g.gain.setValueAtTime(0.0001, now);
+    g.gain.exponentialRampToValueAtTime(amp, now + 0.004);
+    g.gain.exponentialRampToValueAtTime(0.0001, now + dur);
+    src.connect(bp).connect(g).connect(c.destination);
+    src.start(now, Math.random() * 0.9, dur + 0.02);
+    ripDebt = 0;
+  }
+  function ripBurst(n) { for (let k = 0; k < n; k++) setTimeout(() => ripSound(30 + Math.random() * 30), k * 24); }
+
+  // 손가락·마우스: 절취선 근처에서 시작하면 긋기, 바코드 쪽에서 시작하면 끌어내리기
+  // (찢기 시작하면 박스 아래쪽이 잘려 있어서, 문서 전체에서 받아 위치로 판단함)
+  document.addEventListener('pointerdown', (e) => {
+    if (step !== 'pass' || !pending || boarding || e.button > 0) return;
+    if (e.target.closest && e.target.closest('button, .side-action, .topbar, .zoom')) return;
+    const pr = perf.getBoundingClientRect(), sr = stub.getBoundingClientRect(), dr = dock.getBoundingClientRect();
+    const lineY = piece ? piece.lineY : pr.top + pr.height / 2;
+    const bottom = piece ? piece.lineY + piece.h : Math.min(sr.bottom, dr.bottom);
+    if (e.clientX < dr.left - 12 || e.clientX > dr.right + 12) return;
+    if (Math.abs(e.clientY - lineY) <= 30) {
+      gesture = { kind: 'trace', lineY, left: dr.left, width: dr.width, min: e.clientX, max: e.clientX, x: e.clientX };
+      if (piece && piece.b - piece.a > 0.5) { // 이미 찢긴 곳에 이어서 찢기
+        gesture.min = Math.min(gesture.min, dr.left + piece.a);
+        gesture.max = Math.max(gesture.max, dr.left + piece.b);
+      }
+    } else if (e.clientY > lineY + 30 && e.clientY <= bottom) {
       gesture = { kind: 'pull', y: e.clientY, dy: 0 };
     } else {
       return;
     }
     e.preventDefault();
-    cut.style.transition = '';
-    passPane.setPointerCapture(e.pointerId);
+    ensureAudio(); // 찢는 소리를 내려고 이때 오디오를 깨움
+    try { passPane.setPointerCapture(e.pointerId); } catch (err) { /* 무시 */ }
   });
-  passPane.addEventListener('pointermove', (e) => {
-    if (!gesture) return;
+  document.addEventListener('pointermove', (e) => {
+    if (!gesture || boarding) return;
     if (gesture.kind === 'trace') {
-      if (Math.abs(e.clientY - gesture.lineY) > 70) { gesture = null; snapCut(); return; } // 선에서 너무 벗어나면 취소
+      if (Math.abs(e.clientY - gesture.lineY) > 80) { gesture = null; return; } // 선에서 너무 벗어나면 멈춤 (찢긴 곳은 남음)
+      const before = gesture.max - gesture.min;
       gesture.min = Math.min(gesture.min, e.clientX);
       gesture.max = Math.max(gesture.max, e.clientX);
-      const l = clamp(gesture.min - gesture.left, 0, gesture.width);
-      const r = clamp(gesture.max - gesture.left, 0, gesture.width);
-      cut.style.left = l + 'px'; cut.style.width = (r - l) + 'px';
-      if ((r - l) / gesture.width >= 0.8) { gesture = null; tear(); }
+      const grow = gesture.max - gesture.min - before;
+      if (!piece && gesture.max - gesture.min < 3) return;
+      if (!piece) piece = makePiece();
+      piece.a = clamp(gesture.min - gesture.left, 0, gesture.width);
+      piece.b = clamp(gesture.max - gesture.left, 0, gesture.width);
+      renderPiece(piece);
+      ripSound(grow);
+      if ((piece.b - piece.a) / piece.w >= 0.8) { gesture = null; tear(); }
       return;
     }
-    gesture.dy = Math.max(0, e.clientY - gesture.y);
-    if (!fly && gesture.dy > 4) fly = makeFly();
-    if (fly) fly.style.transform = `translateY(${gesture.dy}px) rotate(${-gesture.dy / 18}deg)`;
+    const dy = Math.max(0, e.clientY - gesture.y);
+    if (!piece && dy > 4) { piece = makePiece(); piece.a = 0; piece.b = piece.w; ripBurst(8); }
+    if (!piece) return;
+    if (!piece.free) { piece.free = true; piece.ox = piece.w / 2; piece.a = 0; piece.b = piece.w; }
+    piece.wrap.classList.add('dragging');
+    piece.dy = dy; piece.rot = -dy / 18;
+    renderPiece(piece);
   });
-  function snapCut() {
-    if (boarding) return;
-    cut.style.transition = 'width 220ms ease-out';
-    cut.style.width = '0px';
-  }
   const endGesture = () => {
     const g = gesture;
     gesture = null;
-    if (!g) return;
-    if (g.kind === 'trace') { snapCut(); return; }
-    if (g.dy > 60) { tear(); return; }
-    const f = fly; fly = null;
-    if (!f) return;
-    const done = () => { f.remove(); stub.style.visibility = ''; };
-    if (REDUCED) done();
-    else f.animate([{ transform: f.style.transform || 'none' }, { transform: 'none' }], { duration: 200, easing: 'ease-out' }).finished.then(done, done);
+    if (!g || boarding) return;
+    if (g.kind === 'trace') return; // 손을 떼도 찢긴 곳은 그대로 (이어서 찢을 수 있음)
+    if (g.kind === 'pull' && piece && piece.dy > 60) { tear(); return; }
+    if (piece && piece.free) untear();
   };
-  passPane.addEventListener('pointerup', endGesture);
-  passPane.addEventListener('pointercancel', endGesture);
+  document.addEventListener('pointerup', endGesture);
+  document.addEventListener('pointercancel', endGesture);
+  // 끌어내리다 만 조각은 제자리로 붙음
+  function untear() {
+    const pc = piece;
+    if (!pc) return;
+    pc.wrap.classList.remove('dragging');
+    const done = () => { if (piece === pc) { pc.wrap.remove(); restoreDock(pc); piece = null; } };
+    if (REDUCED) { done(); return; }
+    pc.wrap.animate([{ transform: pc.wrap.style.transform }, { transform: 'none' }], { duration: 220, easing: 'ease-out' }).finished.then(done, done);
+  }
   stub.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); tear(); } });
   $('btn-board').addEventListener('click', tear);
 
@@ -1624,30 +1790,52 @@
     boarding = true;
     gesture = null;
     ensureAudio(); // 사용자 동작 시점에 오디오 잠금 해제
-    cut.style.transition = ''; cut.style.left = '0px'; cut.style.width = '100%';
-    const f = fly || makeFly();
-    fly = null;
-    const from = f.style.transform || 'translateY(0px) rotate(0deg)';
-    // 찢긴 조각은 떨어지고, 남은 탑승권은 절취선에서 곧은 직선으로 끝남 (아래 꼭짓점 두 개)
+    askNotify(); // 비행 중 알림을 쓸 수 있게 (처음 한 번만 물어봄)
+    $('btn-board').disabled = true;
+    $('btn-board').textContent = '탑승 중…';
+    const pc = piece || (piece = makePiece());
+    pc.wrap.classList.remove('dragging');
+    if (REDUCED) { pc.a = 0; pc.b = pc.w; fall(pc); return; }
+    // 남은 부분이 끝까지 찢어짐: 버튼으로 찢으면 왼쪽부터 조금 천천히, 긋다 80%를 넘겼으면 빠르게
+    if (pc.b - pc.a < 1) { pc.a = 0; pc.b = 0; }
+    const a0 = pc.a, b0 = pc.b;
+    const dur = b0 - a0 < 1 ? 560 : 200;
+    const t0 = performance.now();
+    let prevLen = b0 - a0;
+    const stepRip = (now) => {
+      const t = clamp((now - t0) / dur, 0, 1), e = t * t * (3 - 2 * t);
+      pc.a = a0 * (1 - e); pc.b = b0 + (pc.w - b0) * e;
+      renderPiece(pc);
+      const len = pc.b - pc.a;
+      ripSound(len - prevLen); prevLen = len;
+      if (t < 1) requestAnimationFrame(stepRip); else fall(pc);
+    };
+    requestAnimationFrame(stepRip);
+  }
+  // 다 찢어지면 조각은 떨어지고, 남은 탑승권은 절취선에서 곧은 직선으로 끝남 (아래 꼭짓점 두 개)
+  function fall(pc) {
     stub.classList.add('gone');
     perf.classList.add('torn');
     dock.classList.add('cut');
-    $('btn-board').disabled = true;
-    $('btn-board').textContent = '탑승 중…';
-    const cleanup = () => f.remove();
+    restoreDock(pc);
+    const cleanup = () => { pc.wrap.remove(); if (piece === pc) piece = null; };
     if (REDUCED) { cleanup(); setTimeout(board, 400); return; }
-    f.animate([
+    const dir = pc.rot > 0 ? 1 : -1;
+    const from = pc.wrap.style.transform || 'none';
+    pc.wrap.style.setProperty('--lift', '1');
+    pc.wrap.animate([
       { transform: from, opacity: 1 },
-      { transform: 'translate(24px, 50px) rotate(-5deg)', opacity: 1, offset: 0.3 },
-      { transform: 'translate(90px, 440px) rotate(-26deg)', opacity: 0 },
+      { transform: `translate(${-dir * 10}px, ${pc.dy + 46}px) rotate(${pc.rot + dir * 5}deg)`, opacity: 1, offset: 0.3 },
+      { transform: `translate(${-dir * 70}px, ${pc.dy + 460}px) rotate(${pc.rot + dir * 24}deg)`, opacity: 0 },
     ], { duration: 1400, easing: 'cubic-bezier(.45,0,.75,.5)', fill: 'forwards' }).finished.then(cleanup, cleanup);
-    setTimeout(board, 2000); // 찢는 모습을 충분히 보여 준 뒤 출발
+    setTimeout(board, 1700); // 떨어지는 모습을 충분히 보여 준 뒤 출발
   }
   function board() {
     const f = pending;
     if (!f) return;
     f.startAt = Date.now();
     f.endAt = f.startAt + f.minutes * 60000;
+    f.pausedAt = 0; f.pausedMs = 0; f.marks = {};
     f.phase = -1;
     flight = f; pending = null;
     store.set('flight', flight);
@@ -1831,7 +2019,11 @@
   });
 
   // ---------- 4. 비행 중 ----------
-  const progressOf = (f, now) => clamp((now - f.startAt) / (f.endAt - f.startAt), 0, 1);
+  // 일시정지한 시간은 빼고 셈: 멈춘 동안은 진행률·남은 시간이 그대로
+  const durMs = (f) => f.minutes * 60000;
+  const elapsedMs = (f, now) => clamp((f.pausedAt || now) - f.startAt - (f.pausedMs || 0), 0, durMs(f));
+  const progressOf = (f, now) => elapsedMs(f, now) / durMs(f);
+  const halfDone = (f, now) => elapsedMs(f, now) >= durMs(f) / 2; // 마일리지는 정한 시간의 절반이 지난 뒤부터
 
   // 실제 항공사 기내 방송 말투 (한국어 + 영어)
   function hmEn(min) {
@@ -1885,35 +2077,52 @@
     }
   }
   function setPA(ann, time) { setText('pa-text', ann.en); setText('pa-ko', ann.ko); setText('pa-time', fmtHM(time)); }
-  // 단계 표시: 한 번 만들고 클래스만 바꿔서 막대 색이 천천히 차오르게
-  function renderPhases(idx) {
+  // 남은 시간을 짧게: 40초 / 12분 / 1시간 5분
+  function fmtLeft(min) {
+    const s = Math.max(0, Math.round(min * 60));
+    if (s < 60) return `${s}초`;
+    const m = Math.ceil(s / 60), h = Math.floor(m / 60);
+    return h ? `${h}시간${m % 60 ? ` ${m % 60}분` : ''}` : `${m}분`;
+  }
+  // 단계 표시: 단계마다 막대가 지난 만큼 차오르고, 지금 단계에는 다음 단계까지 남은 시간이 나옴
+  function renderPhases(f, p) {
     const ol = $('phases');
     if (ol.children.length !== PHASES.length) {
-      ol.innerHTML = PHASES.map((ph) => `<li class="phase"><b>${ph.en}</b>${ph.ko}</li>`).join('');
+      ol.innerHTML = PHASES.map((ph) => `<li class="phase"><span class="ph-bar"><i></i></span><b>${ph.en}</b><span class="ph-ko">${ph.ko}</span></li>`).join('');
     }
+    const prof = profileOf(f), B = prof.bounds, idx = prof.phase(p);
     [...ol.children].forEach((li, i) => {
+      const fill = i < idx ? 1 : i > idx ? 0 : clamp((p - B[i]) / (B[i + 1] - B[i]), 0, 1);
+      li.querySelector('i').style.transform = `scaleX(${fill.toFixed(4)})`;
       li.classList.toggle('is-done', i < idx);
       li.classList.toggle('is-now', i === idx);
       if (i === idx) li.setAttribute('aria-current', 'step'); else li.removeAttribute('aria-current');
+      const txt = i !== idx ? PHASES[i].ko : f.pausedAt ? '일시정지' : `${PHASES[i].ko} · ${fmtLeft((B[i + 1] - p) * f.minutes)}`;
+      const ko = li.querySelector('.ph-ko');
+      if (ko.textContent !== txt) ko.textContent = txt;
     });
+    return idx;
   }
 
-  let lastPhaseRendered = -1, lastText = 0, lastTitle = '';
+  let lastText = 0, lastTitle = '';
+  const flightPane = document.querySelector('.pane-flight');
   function renderFlightStatic() {
     const f = flight;
     if (!f) return;
     $('f-flight').textContent = f.flightNo;
     $('f-route').textContent = `${f.from} → ${f.to}`;
+    $('m-route').textContent = `${f.from} → ${f.to}`;
     $('f-subject').textContent = f.subject;
     $('f-subject').style.background = subjectColor(SUBJECTS.some((s) => s.n === f.subject) ? f.subject : '기타');
-    $('t-eta').textContent = fmtHM(f.endAt);
     $('abort-confirm').hidden = true;
     $('btn-abort').hidden = false;
     $('btn-voice').setAttribute('aria-pressed', String(prefs.voice));
+    renderNotifyBtn();
+    flightPane.classList.toggle('mini', !!prefs.flightMini);
+    dock.classList.toggle('mini', !!prefs.flightMini);
+    renderPause();
     const p = progressOf(f, Date.now());
-    const idx = profileOf(f).phase(p);
-    renderPhases(idx);
-    lastPhaseRendered = idx;
+    renderPhases(f, p);
     // 새로고침 뒤에는 지난 방송을 다시 울리지 않고 문구만 보여 줌
     if (f.phase >= 0) setPA(announcement(f, f.phase, p), Date.now());
     lastText = 0;
@@ -1923,19 +2132,60 @@
   function updateTexts(f, p, now) {
     const prof = profileOf(f);
     const s = prof.frac(p);
-    const clock = fmtClock((f.endAt - now) / 1000);
+    const clock = fmtClock((durMs(f) - elapsedMs(f, now)) / 1000);
     const spd = prof.speed(p);
     const before = prof.speed(p - 4 / (f.minutes * 60)); // 4초 전과 비교
     const flown = f.km * s;
+    const idx = prof.phase(p);
+    const paused = !!f.pausedAt;
     $('f-remain').textContent = clock;
+    $('m-remain').textContent = clock;
+    $('f-remain-label').textContent = paused ? '일시정지 중' : 'Time remaining';
     $('f-dist').textContent = fmtNum(f.km - flown) + ' km';
+    $('m-dist').textContent = `${fmtNum(f.km - flown)} km 남음`;
+    $('m-phase').textContent = paused ? '일시정지' : `${PHASES[idx].en} · ${PHASES[idx].ko}`;
     $('f-bar').style.width = (p * 100).toFixed(2) + '%';
+    $('m-bar').style.width = (p * 100).toFixed(2) + '%';
     $('t-alt').textContent = fmtNum(Math.round(prof.alt(p) / 10) * 10) + ' ft';
     $('t-spd').textContent = fmtNum(spd) + ' km/h';
-    $('t-trend').textContent = spd - before > 0.3 ? '▲ 가속' : before - spd > 0.3 ? '▼ 감속' : '';
-    $('t-miles').textContent = fmtNum(flown * KM_TO_MI) + ' mi';
-    const title = `${clock} · ${f.from}→${f.to}`;
+    $('t-trend').textContent = paused ? '' : spd - before > 0.3 ? '▲ 가속' : before - spd > 0.3 ? '▼ 감속' : '';
+    $('t-eta').textContent = paused ? '일시정지' : fmtHM(f.endAt);
+    // 마일리지: 정한 시간의 절반이 지나야 쌓이기 시작
+    const miles = halfDone(f, now)
+      ? `${fmtNum(flown * KM_TO_MI)} mi <small>적립 중</small>`
+      : `0 mi <small>${fmtLeft((durMs(f) / 2 - elapsedMs(f, now)) / 60000)} 뒤부터 적립</small>`;
+    if ($('t-miles').innerHTML !== miles) $('t-miles').innerHTML = miles;
+    const title = `${paused ? '⏸ ' : ''}${clock} · ${f.from}→${f.to}`;
     if (title !== lastTitle) { document.title = title; lastTitle = title; }
+  }
+
+  // 여정 중 알림: 화면을 보고 있으면 위쪽 알림 띠, 다른 앱·탭에 있으면 기기 알림
+  function alertUser(title, body) {
+    if (document.hidden) sysNotify(title, body);
+    else if (step === 'flight') toast(`${title} — ${body}`);
+  }
+  function phaseMsg(f, idx, p) {
+    const left = fmtLeft((1 - p) * f.minutes), city = AP[f.to].city;
+    return [
+      '탑승구에서 출발을 기다려요.',
+      `이륙해요. 지금부터 ${f.subject}에 집중!`,
+      `순항 고도에 올라왔어요. ${city}까지 ${left} 남았어요.`,
+      `${city}${euro(city)} 하강을 시작했어요. ${left} 남았어요.`,
+      '곧 착륙해요. 마무리해 볼까요?',
+    ][idx];
+  }
+  function milestones(f, now) {
+    const m = f.marks || (f.marks = {});
+    let changed = false;
+    if (!m.half && halfDone(f, now)) {
+      m.half = changed = true;
+      alertUser('절반 지났어요', '지금부터 마일리지가 쌓여요. 이대로 끝까지 가 봐요!');
+    }
+    if (!m.five && f.minutes >= 20 && durMs(f) - elapsedMs(f, now) <= 5 * 60000) {
+      m.five = changed = true;
+      alertUser('착륙 5분 전', `${AP[f.to].city} 도착까지 5분 남았어요.`);
+    }
+    if (changed) store.set('flight', f);
   }
 
   function tick() {
@@ -1946,17 +2196,20 @@
     if (p >= 1) { land(false); return; }
     const idx = profileOf(f).phase(p);
     if (idx !== f.phase) {
+      const first = f.phase < 0;
       f.phase = idx;
       store.set('flight', f);
       const ann = announcement(f, idx, p);
       setPA(ann, now);
       chime();
       speak(ann);
+      if (!first) alertUser(`${PHASES[idx].en} · ${PHASES[idx].ko}`, phaseMsg(f, idx, p));
+      if (step === 'flight') renderPhases(f, p);
     }
+    milestones(f, now);
     if (step !== 'flight') return;
-    if (idx !== lastPhaseRendered) { renderPhases(idx); lastPhaseRendered = idx; }
-    if (now - lastText >= 1000) { lastText = now; updateTexts(f, p, now); }
-    if (!document.hidden) { flightGeometry(); follow(viewFor('flight', dock.getBoundingClientRect())); }
+    if (now - lastText >= 1000) { lastText = now; updateTexts(f, p, now); renderPhases(f, p); }
+    kick(); // 비행기·지도는 frame()에서 부드럽게 그림
   }
   let flightTimer = 0;
   function startFlightLoop() { if (!flightTimer) flightTimer = setInterval(tick, 200); tick(); }
@@ -1964,17 +2217,130 @@
   // 다른 화면이거나 탭이 백그라운드여도 착륙은 확인
   setInterval(() => { if (flight && !flightTimer) tick(); }, 1000);
 
+  // ---------- 일시정지 ----------
+  function setPaused(on) {
+    const f = flight;
+    if (!f) return;
+    const now = Date.now();
+    if (on && !f.pausedAt) {
+      f.pausedAt = now;
+      if (HAS_VOICE) speechSynthesis.cancel();
+      if (noiseGain && actx) noiseGain.gain.setTargetAtTime(0, actx.currentTime, 0.3);
+      toast('일시정지했어요. 남은 시간과 비행기가 그대로 멈춰 있어요.');
+    } else if (!on && f.pausedAt) {
+      f.pausedMs = (f.pausedMs || 0) + (now - f.pausedAt);
+      f.pausedAt = 0;
+      f.endAt = f.startAt + f.pausedMs + durMs(f); // 멈춘 만큼 도착이 늦어짐
+      if (noiseSrc) duck(false);
+      toast(`다시 출발! 도착 예정 ${fmtHM(f.endAt)}`);
+    } else return;
+    store.set('flight', f);
+    renderPause();
+    lastText = 0;
+    tick();
+    kick();
+  }
+  function renderPause() {
+    const paused = !!(flight && flight.pausedAt);
+    flightPane.classList.toggle('paused', paused);
+    document.body.classList.toggle('is-paused', paused);
+    $('btn-pause').setAttribute('aria-pressed', String(paused));
+    setText('btn-pause', paused ? '다시 시작' : '일시정지');
+    $('btn-pause-mini').setAttribute('aria-pressed', String(paused));
+    $('btn-pause-mini').setAttribute('aria-label', paused ? '다시 시작' : '일시정지');
+  }
+  $('btn-pause').addEventListener('click', () => setPaused(!(flight && flight.pausedAt)));
+  $('btn-pause-mini').addEventListener('click', () => setPaused(!(flight && flight.pausedAt)));
+
+  // ---------- 비행 창 줄이기: 필요한 정보(남은 시간·거리·단계·진행 막대)만 ----------
+  function morphDock(change, dur) {
+    const first = dock.getBoundingClientRect();
+    change();
+    const last = dock.getBoundingClientRect();
+    lastDock = last;
+    if (!REDUCED) {
+      dock.getAnimations().forEach((a) => a.cancel());
+      const box = (r) => ({ left: r.left + 'px', top: r.top + 'px', width: r.width + 'px', height: r.height + 'px', right: 'auto', bottom: 'auto' });
+      dock.animate([box(first), box(last)], { duration: dur, easing: 'cubic-bezier(.2,.8,.2,1)' });
+      const pane = PANES.find((p) => !p.hidden);
+      if (pane) pane.animate([{ opacity: 0 }, { opacity: 1 }], { duration: dur * 0.8, delay: dur * 0.2, easing: 'ease-out', fill: 'backwards' });
+      morphUntil = performance.now() + dur + 40;
+    }
+    if (step === 'flight' && following) flyTo(viewFor('flight', last), dur + 200);
+  }
+  function setFlightMini(on) {
+    prefs.flightMini = on; savePrefs();
+    const apply = () => { flightPane.classList.toggle('mini', on); dock.classList.toggle('mini', on); };
+    if (step !== 'flight') { apply(); return; }
+    morphDock(apply, 480);
+    (on ? $('btn-expand') : $('btn-collapse')).focus({ preventScroll: true });
+  }
+  $('btn-collapse').addEventListener('click', () => setFlightMini(true));
+  $('btn-expand').addEventListener('click', () => setFlightMini(false));
+
+  // ---------- 기기 알림 (GitHub Pages 같은 https 주소에서) ----------
+  const CAN_NOTIFY = 'Notification' in window;
+  let swReg = null;
+  if ('serviceWorker' in navigator && (location.protocol === 'https:' || /^(localhost|127\.0\.0\.1)$/.test(location.hostname))) {
+    try { navigator.serviceWorker.register('sw.js').then((r) => { swReg = r; }, () => {}); } catch (e) { /* 미리보기 등 */ }
+  }
+  const notifyOn = () => CAN_NOTIFY && prefs.notify && Notification.permission === 'granted';
+  function renderNotifyBtn() { $('btn-notify').setAttribute('aria-pressed', String(notifyOn())); }
+  function askNotify() { // 탑승할 때 처음 한 번만 물어봄
+    if (!CAN_NOTIFY || !prefs.notify || Notification.permission !== 'default') return;
+    try {
+      const r = Notification.requestPermission(renderNotifyBtn);
+      if (r && r.then) r.then(renderNotifyBtn, () => {});
+    } catch (e) { /* 무시 */ }
+  }
+  async function sysNotify(title, body) {
+    if (!notifyOn()) return;
+    const opt = { body, tag: 'focusair-flight', renotify: true, lang: 'ko' };
+    try {
+      if (swReg && swReg.showNotification) { await swReg.showNotification(title, opt); return; }
+      new Notification(title, opt);
+    } catch (e) { /* 이 브라우저에서는 알림을 못 띄움 */ }
+  }
+  function clearNotify() {
+    if (swReg && swReg.getNotifications) swReg.getNotifications({ tag: 'focusair-flight' }).then((l) => l.forEach((n) => n.close()), () => {});
+  }
+  if (!CAN_NOTIFY) $('btn-notify').hidden = true;
+  $('btn-notify').addEventListener('click', async () => {
+    if (!CAN_NOTIFY) return;
+    if (Notification.permission === 'denied') { toast('브라우저 설정에서 이 사이트의 알림을 허용해 주세요.'); return; }
+    if (Notification.permission === 'default') {
+      prefs.notify = true; savePrefs();
+      try { await Notification.requestPermission(); } catch (e) { /* 무시 */ }
+      renderNotifyBtn();
+      if (notifyOn()) toast('알림을 켰어요. 다른 앱에 있을 때 단계가 바뀌거나 도착하면 알려 드려요.');
+      return;
+    }
+    prefs.notify = !prefs.notify; savePrefs();
+    renderNotifyBtn();
+    toast(prefs.notify ? '알림을 켰어요.' : '알림을 껐어요.');
+  });
+  // 비행 중에 다른 앱으로 가거나 화면을 끄면 "비행 중" 알림, 돌아오면 지움
+  document.addEventListener('visibilitychange', () => {
+    if (!flight) return;
+    if (document.hidden) {
+      if (!flight.pausedAt) sysNotify('✈ 비행 중이에요', `${flight.from} → ${flight.to} · 남은 시간 ${fmtClock((durMs(flight) - elapsedMs(flight, Date.now())) / 1000)}. 돌아오면 이어서 날아요.`);
+    } else {
+      clearNotify();
+    }
+  });
+
   $('btn-noise').addEventListener('click', () => {
     if (noiseSrc) { stopNoise(); return; }
     $('btn-noise').setAttribute('aria-pressed', 'true');
     startNoise().then((ok) => {
       if (!ok) { $('btn-noise').setAttribute('aria-pressed', 'false'); toast('이 브라우저에서는 소리를 낼 수 없어요.'); }
+      else if (flight && flight.pausedAt && noiseGain && actx) noiseGain.gain.setTargetAtTime(0, actx.currentTime, 0.3);
     });
   });
   $('btn-voice').addEventListener('click', () => {
     prefs.voice = !prefs.voice; savePrefs();
     $('btn-voice').setAttribute('aria-pressed', String(prefs.voice));
-    if (prefs.voice && flight) speak(announcement(flight, Math.max(0, flight.phase), progressOf(flight, Date.now())));
+    if (prefs.voice && flight && !flight.pausedAt) speak(announcement(flight, Math.max(0, flight.phase), progressOf(flight, Date.now())));
     else if (HAS_VOICE) speechSynthesis.cancel();
   });
   $('btn-wake').addEventListener('click', () => {
@@ -1984,9 +2350,13 @@
   });
   $('btn-abort').addEventListener('click', () => {
     if (!flight) return;
-    const min = Math.floor((Date.now() - flight.startAt) / 60000);
+    const now = Date.now();
+    const min = Math.floor(elapsedMs(flight, now) / 60000);
+    const miles = halfDone(flight, now)
+      ? '정한 시간의 절반을 넘겼으니 날아간 거리만큼 마일리지는 받아요.'
+      : `정한 시간의 절반(${fmtDur(Math.ceil(flight.minutes / 2))})을 넘기지 않아 마일리지는 없어요.`;
     $('abort-text').textContent = min >= 1
-      ? `정말 비행을 중단할까요? 지금까지 집중한 ${fmtDur(min)}은 로그북에 '회항'으로 남고, 착륙 성공으로는 세지 않아요.`
+      ? `정말 비행을 중단할까요? 지금까지 집중한 ${fmtDur(min)}은 로그북에 '회항'으로 남고, 착륙 성공으로는 세지 않아요. ${miles}`
       : '정말 비행을 중단할까요? 1분이 지나지 않아 기록은 남지 않아요.';
     showEl('abort-confirm');
     hideEl('btn-abort', { opacity: 0, transform: 'scale(0.9)' });
@@ -1998,9 +2368,12 @@
   function land(diverted) {
     const f = flight;
     if (!f) return;
-    const now = Math.min(Date.now(), f.endAt);
-    const focusedMin = Math.round((now - f.startAt) / 60000);
+    const el = elapsedMs(f, Date.now());
+    const now = f.pausedAt || Math.min(Date.now(), f.endAt); // 착륙(또는 회항) 시각
+    const focusedMin = Math.round(el / 60000); // 일시정지한 시간은 빼고 셈
     flight = null;
+    document.body.classList.remove('is-paused');
+    clearNotify();
     store.del('flight');
     stopFlightLoop();
     stopNoise();
@@ -2013,14 +2386,15 @@
       go('home');
       return;
     }
-    const p = progressOf(f, now);
+    const p = el / durMs(f);
     const kmFlown = diverted ? Math.round(f.km * profileOf(f).frac(p)) : f.km;
+    const earn = !diverted || el >= durMs(f) / 2; // 마일리지는 정한 시간의 절반을 넘겨야 받음
     const milesBefore = totalMiles();
     const entry = {
       id: f.startAt, date: f.startAt, landedAt: now, flightNo: f.flightNo,
       from: f.from, to: diverted ? f.from : f.to, plannedTo: f.to,
       subject: f.subject, aircraft: f.aircraft, minutes: f.minutes, focusedMin,
-      km: kmFlown, miles: Math.round(kmFlown * KM_TO_MI),
+      km: kmFlown, miles: earn ? Math.round(kmFlown * KM_TO_MI) : 0,
       status: diverted ? 'diverted' : 'arrived',
     };
     log.unshift(entry);
@@ -2032,6 +2406,7 @@
       loc = depCode = f.to; store.set('loc', loc);
       chime();
       speak(announcement(f, 5, 1));
+      if (document.hidden) sysNotify(`${AP[f.to].city} 도착! 착륙 성공 ✈`, `${f.subject} ${fmtDur(focusedMin)} 비행을 끝까지 마쳤어요. +${fmtNum(entry.miles)} mi`);
     }
     lastEntry = entry;
     renderArrival(entry, newAc);
@@ -2048,7 +2423,9 @@
     $('a-stamp-date').textContent = fmtDate(e.landedAt);
     if (e.status === 'diverted') {
       $('a-title').textContent = `${dest.city}${euro(dest.city)} 회항했어요`;
-      $('a-sub').textContent = `${e.subject} 비행을 중간에 멈췄어요. 집중한 ${fmtDur(e.focusedMin)}과 날아간 거리만큼의 마일은 기록에 남았어요.`;
+      $('a-sub').textContent = e.miles > 0
+        ? `${e.subject} 비행을 중간에 멈췄어요. 집중한 ${fmtDur(e.focusedMin)}과 날아간 거리만큼의 마일은 기록에 남았어요.`
+        : `${e.subject} 비행을 중간에 멈췄어요. 집중한 ${fmtDur(e.focusedMin)}은 기록에 남았지만, 정한 시간의 절반을 넘기지 않아 마일리지는 없어요.`;
     } else {
       $('a-title').textContent = `${dest.city}에 도착했어요`;
       $('a-sub').textContent = `${e.subject} ${fmtDur(e.focusedMin)} 비행을 끝까지 마쳤어요. 착륙 성공!`;
@@ -2162,7 +2539,8 @@
   startTiles();
   if (document.fonts && document.fonts.ready) document.fonts.ready.then(kick);
   if (flight) {
-    if (Date.now() >= flight.endAt) { go('home', true); land(false); }
+    if (!flight.marks) flight.marks = { half: halfDone(flight, Date.now()), five: durMs(flight) - elapsedMs(flight, Date.now()) <= 5 * 60000 };
+    if (progressOf(flight, Date.now()) >= 1) { go('home', true); land(false); }
     else go('flight', true);
   } else {
     go('home', true);
