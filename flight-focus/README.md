@@ -94,6 +94,7 @@ flight-focus/
 ├── app.js          비행 프로필, 지구본, 타이머, 기록 등 앱 로직
 ├── airports.js     공항 291곳 (IATA 코드, 영어 이름, 위도·경도)
 ├── sw.js           기기 알림용 서비스 워커 (캐시는 안 함)
+├── DEVLOG.md       개발 기록 (요청과 반영, 해결한 문제, 구조)
 ├── world.js        세계 육지 (Natural Earth 1:110m, 퍼블릭 도메인) — 위성 사진을 못 쓸 때
 ├── world50.js      해안선·국경선 (Natural Earth 1:50m, 퍼블릭 도메인) — 확대했을 때
 ├── earth-texture.js 위성 사진 (NASA Blue Marble 4096×2048, 퍼블릭 도메인)
