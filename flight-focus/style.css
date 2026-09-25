@@ -414,7 +414,7 @@ body:not([data-step="flight"]) .phases { opacity: 0; transform: translateY(-16px
 body.is-paused .phase.is-now .ph-bar { background: var(--gray); box-shadow: none; }
 @media (min-width: 640px) and (min-aspect-ratio: 1/1) { .phases { top: 24px; } }
 
-.pane-flight { gap: 14px; }
+.pane-flight { gap: 12px; overflow: hidden; } /* 비행 창은 스크롤하지 않음: 넘치면 fitFlightPane()이 덜 중요한 것부터 숨김 */
 .fl-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .fl-head b { font-size: 17px; }
 .subj-pill { margin-left: auto; border-radius: 999px; padding: 5px 12px; font-size: 13px; font-weight: 500; background: var(--gray); }
@@ -424,21 +424,39 @@ body.is-paused .phase.is-now .ph-bar { background: var(--gray); box-shadow: none
 .fl-big .ta-r b { font-size: clamp(20px, 3vw, 26px); }
 .bar { height: 8px; border-radius: 4px; background: var(--gray); overflow: hidden; flex: none; }
 .bar > div { height: 100%; width: 0; background: var(--ink); border-radius: 4px; }
-.tele { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 14px; }
-.tele dd { font-weight: 700; font-size: 17px; }
-.tele small { font-weight: 500; font-size: 12px; color: var(--muted); }
-.pa { display: grid; gap: 4px; padding: 12px 14px; border-radius: 18px; background: var(--gray-2); }
+.tele { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px 10px; }
+.tele dt { font-size: 11px; }
+.tele dd { font-weight: 700; font-size: 15px; line-height: 1.3; }
+.tele small { display: block; font-weight: 500; font-size: 11px; color: var(--muted); line-height: 1.3; min-height: 1.3em; }
+.pa { display: grid; gap: 3px; padding: 10px 14px; border-radius: 18px; background: var(--gray-2); flex: none; }
 .pa-head { display: flex; justify-content: space-between; }
-.pa p { font-size: 14px; }
-.controls { display: flex; flex-wrap: wrap; gap: 8px; }
+.pa p { font-size: 13.5px; line-height: 1.45; display: -webkit-box; -webkit-box-orient: vertical; overflow: hidden; }
+#pa-text { -webkit-line-clamp: 3; line-clamp: 3; }
+#pa-ko { -webkit-line-clamp: 2; line-clamp: 2; font-size: 12.5px; }
+/* 창 높이가 모자라면 한국어 번역 → 방송 칸 → 비행 정보 순으로 숨김 */
+.pane-flight.tight #pa-ko, .pane-flight.tighter .pa, .pane-flight.tightest .tele,
+.pane-flight.squeeze .fl-big, .pane-flight.squeeze .bar { display: none; }
+.pane-flight.confirming .controls { display: none; } /* 중단 확인 창이 버튼 줄 자리를 대신함 */
+.controls { display: flex; justify-content: space-between; gap: 4px; flex: none; }
+.cbtn { display: grid; justify-items: center; gap: 4px; min-width: 0; flex: 1 1 0; border: 0; background: transparent; padding: 0; font-size: 11px; font-weight: 500; color: var(--muted); white-space: nowrap; }
+.cbtn .ic { width: 42px; height: 42px; border-radius: 50%; display: grid; place-items: center; background: var(--gray); color: var(--ink); transition: background-color 220ms var(--ease), color 220ms var(--ease); }
+.cbtn svg { width: 21px; height: 21px; }
+.cbtn[aria-pressed="true"] { color: var(--ink); }
+.cbtn[aria-pressed="true"] .ic { background: var(--ink); color: var(--white); }
+.cbtn.strong .ic { background: var(--ink); color: var(--white); }
+.cbtn.strong[aria-pressed="true"] .ic { background: var(--yellow); color: var(--ink); }
+.cbtn .i-play { display: none; }
+.cbtn[aria-pressed="true"] .i-pause { display: none; }
+.cbtn[aria-pressed="true"] .i-play { display: inline; }
+.cbtn.danger { color: var(--danger); }
+.cbtn.danger .ic { color: var(--danger); background: #FBE7E7; }
 .tbtn { border: 0; border-radius: 999px; background: var(--gray); padding: 9px 14px; font-size: 13px; font-weight: 500; }
 .tbtn[aria-pressed="true"] { background: var(--ink); color: var(--white); }
 .tbtn.danger { color: var(--danger); margin-left: auto; }
 .tbtn.strong { background: var(--ink); color: var(--white); font-weight: 700; }
 .tbtn.strong[aria-pressed="true"] { background: var(--yellow); color: var(--ink); }
-#t-trend { white-space: nowrap; }
 .tele dd { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-#t-miles small { display: block; font-weight: 500; line-height: 1.3; } /* 두 줄로 고정: 글자가 바뀌어도 창 높이가 그대로 */
+.tele .u { font-size: 11px; font-weight: 500; color: var(--muted); margin-left: 2px; } /* 줄바꿈 없음: 글자가 바뀌어도 창 높이가 그대로 */
 .fl-head .fl-toggle { flex: none; width: 36px; height: 36px; box-shadow: none; background: var(--gray); }
 .fl-head .fl-toggle svg { width: 18px; height: 18px; }
 .pane-flight.paused #f-remain { color: var(--muted); }

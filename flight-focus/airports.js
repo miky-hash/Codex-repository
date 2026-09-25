@@ -1,4 +1,4 @@
-/* 포커스 에어 공항 목록 (248곳) — code: IATA 코드, en: 영어 방송용 이름, lat/lon: 위도·경도(도) */
+/* 포커스 에어 공항 목록 (291곳) — code: IATA 코드, en: 영어 방송용 이름, lat/lon: 위도·경도(도) */
 window.AIRPORTS = [
   // 한국
   { code: 'ICN', en: 'Incheon', city: '인천', country: '대한민국', region: '한국', lat: 37.46, lon: 126.44 },
@@ -266,4 +266,51 @@ window.AIRPORTS = [
   { code: 'CPT', en: 'Cape Town', city: '케이프타운', country: '남아프리카공화국', region: '유럽·아프리카', lat: -33.96, lon: 18.60 },
   { code: 'MRU', en: 'Mauritius', city: '모리셔스', country: '모리셔스', region: '유럽·아프리카', lat: -20.43, lon: 57.68 },
   { code: 'SEZ', en: 'Seychelles', city: '세이셸', country: '세이셸', region: '유럽·아프리카', lat: -4.67, lon: 55.52 },
+  // 인천에서 1시간 안팎
+  { code: 'OSN', en: 'Osan', city: '오산', country: '대한민국', region: '한국', lat: 37.09, lon: 127.03 },
+  { code: 'HMY', en: 'Seosan', city: '서산', country: '대한민국', region: '한국', lat: 36.70, lon: 126.49 },
+  { code: 'YEC', en: 'Yecheon', city: '예천', country: '대한민국', region: '한국', lat: 36.63, lon: 128.35 },
+  { code: 'KAG', en: 'Gangneung', city: '강릉', country: '대한민국', region: '한국', lat: 37.75, lon: 128.94 },
+  { code: 'SHO', en: 'Sokcho', city: '속초', country: '대한민국', region: '한국', lat: 38.14, lon: 128.60 },
+  { code: 'MPK', en: 'Mokpo', city: '목포', country: '대한민국', region: '한국', lat: 34.76, lon: 126.38 },
+  { code: 'JDG', en: 'Jeongseok', city: '제주 정석', country: '대한민국', region: '한국', lat: 33.40, lon: 126.71 },
+  { code: 'FNJ', en: 'Pyongyang', city: '평양', country: '북한', region: '한국', lat: 39.22, lon: 125.67 },
+  { code: 'WOS', en: 'Wonsan', city: '원산', country: '북한', region: '한국', lat: 39.17, lon: 127.49 },
+  { code: 'WEH', en: 'Weihai', city: '웨이하이', country: '중국', region: '중화권', lat: 37.19, lon: 122.23 },
+  { code: 'YNT', en: 'Yantai', city: '옌타이', country: '중국', region: '중화권', lat: 37.66, lon: 120.99 },
+  { code: 'DDG', en: 'Dandong', city: '단둥', country: '중국', region: '중화권', lat: 40.02, lon: 124.29 },
+  { code: 'TSJ', en: 'Tsushima', city: '쓰시마', country: '일본', region: '일본', lat: 34.28, lon: 129.33 },
+  { code: 'IKI', en: 'Iki', city: '이키', country: '일본', region: '일본', lat: 33.75, lon: 129.79 },
+  { code: 'FUJ', en: 'Goto Fukue', city: '고토 후쿠에', country: '일본', region: '일본', lat: 32.67, lon: 128.83 },
+  // 일본 더
+  { code: 'HSG', en: 'Saga', city: '사가', country: '일본', region: '일본', lat: 33.15, lon: 130.30 },
+  { code: 'UBJ', en: 'Yamaguchi Ube', city: '야마구치 우베', country: '일본', region: '일본', lat: 33.93, lon: 131.28 },
+  { code: 'IZO', en: 'Izumo', city: '이즈모', country: '일본', region: '일본', lat: 35.41, lon: 132.89 },
+  { code: 'YGJ', en: 'Yonago', city: '요나고', country: '일본', region: '일본', lat: 35.49, lon: 133.24 },
+  { code: 'KMI', en: 'Miyazaki', city: '미야자키', country: '일본', region: '일본', lat: 31.88, lon: 131.45 },
+  { code: 'KCZ', en: 'Kochi', city: '고치', country: '일본', region: '일본', lat: 33.55, lon: 133.67 },
+  { code: 'TKS', en: 'Tokushima', city: '도쿠시마', country: '일본', region: '일본', lat: 34.13, lon: 134.61 },
+  { code: 'UKB', en: 'Kobe', city: '고베', country: '일본', region: '일본', lat: 34.63, lon: 135.22 },
+  { code: 'TOY', en: 'Toyama', city: '도야마', country: '일본', region: '일본', lat: 36.65, lon: 137.19 },
+  { code: 'AXT', en: 'Akita', city: '아키타', country: '일본', region: '일본', lat: 39.62, lon: 140.22 },
+  { code: 'AKJ', en: 'Asahikawa', city: '아사히카와', country: '일본', region: '일본', lat: 43.67, lon: 142.45 },
+  // 중국 더
+  { code: 'TNA', en: 'Jinan', city: '지난', country: '중국', region: '중화권', lat: 36.86, lon: 117.22 },
+  { code: 'SJW', en: 'Shijiazhuang', city: '스자좡', country: '중국', region: '중화권', lat: 38.28, lon: 114.70 },
+  { code: 'CGQ', en: 'Changchun', city: '창춘', country: '중국', region: '중화권', lat: 43.99, lon: 125.69 },
+  { code: 'MDG', en: 'Mudanjiang', city: '무단장', country: '중국', region: '중화권', lat: 44.52, lon: 129.57 },
+  { code: 'WUX', en: 'Wuxi', city: '우시', country: '중국', region: '중화권', lat: 31.49, lon: 120.43 },
+  { code: 'NGB', en: 'Ningbo', city: '닝보', country: '중국', region: '중화권', lat: 29.83, lon: 121.46 },
+  { code: 'FOC', en: 'Fuzhou', city: '푸저우', country: '중국', region: '중화권', lat: 25.94, lon: 119.66 },
+  { code: 'KWL', en: 'Guilin', city: '구이린', country: '중국', region: '중화권', lat: 25.22, lon: 110.04 },
+  { code: 'DYG', en: 'Zhangjiajie', city: '장자제', country: '중국', region: '중화권', lat: 29.10, lon: 110.44 },
+  // 동남아시아 더
+  { code: 'DLI', en: 'Da Lat', city: '달랏', country: '베트남', region: '동남아시아', lat: 11.75, lon: 108.37 },
+  { code: 'HUI', en: 'Hue', city: '후에', country: '베트남', region: '동남아시아', lat: 16.40, lon: 107.70 },
+  { code: 'KBV', en: 'Krabi', city: '끄라비', country: '태국', region: '동남아시아', lat: 8.10, lon: 98.99 },
+  { code: 'USM', en: 'Koh Samui', city: '코사무이', country: '태국', region: '동남아시아', lat: 9.55, lon: 100.06 },
+  { code: 'TAG', en: 'Bohol', city: '보홀', country: '필리핀', region: '동남아시아', lat: 9.57, lon: 123.78 },
+  { code: 'PPS', en: 'Puerto Princesa', city: '팔라완', country: '필리핀', region: '동남아시아', lat: 9.74, lon: 118.76 },
+  { code: 'YIA', en: 'Yogyakarta', city: '족자카르타', country: '인도네시아', region: '동남아시아', lat: -7.90, lon: 110.06 },
+  { code: 'LOP', en: 'Lombok', city: '롬복', country: '인도네시아', region: '동남아시아', lat: -8.76, lon: 116.28 },
 ];

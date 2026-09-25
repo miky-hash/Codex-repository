@@ -38,7 +38,9 @@
   ];
   const ACMAP = Object.fromEntries(AIRCRAFT.map((a) => [a.id, a]));
   const acShort = (id) => (ACMAP[id] ? ACMAP[id].name.replace(/^(Airbus|Boeing) /, '') : '-');
-  const KM_TO_MI = 0.621371;
+  // 마일리지는 집중한 시간에 비례: 1분에 8마일 (여객기 평균 속도 약 780km/h ≈ 분당 8마일)
+  const MI_PER_MIN = 8;
+  const milesFor = (ms) => Math.round(ms / 60000 * MI_PER_MIN);
 
   // ---------- 저장소 (막혀 있어도 앱은 동작) ----------
   const store = {
@@ -491,7 +493,9 @@
   function planePxPerSec() {
     if (!flight || flight.pausedAt) return 0;
     const kmh = profileOf(flight).speed(progressOf(flight, Date.now()));
-    return kmh / 3600 * (apparentR() / 6371);
+    // 화면 한가운데의 1km가 몇 픽셀인지: 인터넷 지도는 원근 때문에 겉보기 반지름이 아니라 실제 반지름(worldR)으로 계산
+    const pxPerKm = (tilesOn() ? worldR() : view.r * view.zoom) / 6371;
+    return kmh / 3600 * pxPerKm;
   }
   function frame(now) {
     raf = 0;
@@ -515,7 +519,7 @@
       if (on) globeGL.render();
     }
     draw(now);
-    if (tween || (scene.pop && now - scene.pop.t0 < 420) || (flying && planePxPerSec() > 1.5)) kick();
+    if (tween || (scene.pop && now - scene.pop.t0 < 420) || (flying && planePxPerSec() > 0.8)) kick();
   }
 
   function roundRect(x, y, w, h, r) {
@@ -844,6 +848,11 @@
   const routeZoom = (ext) => clamp(0.7 / Math.sin(clamp(ext, 0.004, Math.PI / 2)), 1, 1.4);
   let zoomMul = 1; // 사용자가 손가락·휠·버튼으로 바꾼 배율
 
+  // 확대·축소 한계: 비행 중에는 지구 전체가 보일 때까지 축소할 수 있음
+  const flightMinZoom = () => 0.34 * Math.min(W, H) / (Math.hypot(W, H) + 40);
+  const minZoom = () => (step === 'flight' ? flightMinZoom() : 0.4);
+  let flightBase = 1; // 비행 중 기본 배율 (사용자 배율 zoomMul을 곱하기 전)
+  const mulRange = (m) => clamp(m, step === 'flight' ? flightMinZoom() / flightBase : 0.4, maxZoom() / 2);
   function viewFor(s, d) {
     const slot = slotFor(s, d);
     const dep = AP[depCode];
@@ -863,12 +872,13 @@
       center = d3.geoInterpolate(A, B)(profileOf(flight).frac(p));
       const dist = Math.min(d3.geoDistance(A, B), Math.PI / 2);
       zoom = clamp((slot.area * 0.42) / (slot.r * Math.sin(Math.max(dist, 0.004))), 0.15, 30);
+      flightBase = zoom;
     } else if (s === 'arrive' && lastEntry && AP[lastEntry.to]) {
       center = lonlat(AP[lastEntry.to]);
     } else if (s === 'home') {
       center = lonlat(AP[homeSel]);
     }
-    return Object.assign(slot, { lon: center[0], lat: center[1], zoom: clamp(zoom * zoomMul, 0.15, maxZoom()) });
+    return Object.assign(slot, { lon: center[0], lat: center[1], zoom: clamp(zoom * zoomMul, s === 'flight' ? flightMinZoom() : 0.15, maxZoom()) });
   }
 
   function updateScene() {
@@ -913,10 +923,10 @@
   const canZoom = () => HAS_GEO && step !== 'pass' && step !== 'log';
   function zoomBy(f) {
     if (!canZoom()) return;
-    zoomMul = clamp(zoomMul * f, 0.4, maxZoom() / 2);
+    zoomMul = mulRange(zoomMul * f);
     if (step === 'flight' && following) { follow(viewFor('flight', dockRect())); return; }
-    if (tween) { tween.to.zoom = clamp(tween.to.zoom * f, 0.4, maxZoom()); return; }
-    view.zoom = clamp(view.zoom * f, 0.4, maxZoom());
+    if (tween) { tween.to.zoom = clamp(tween.to.zoom * f, minZoom(), maxZoom()); return; }
+    view.zoom = clamp(view.zoom * f, minZoom(), maxZoom());
     kick();
   }
   cv.addEventListener('pointerdown', (e) => {
@@ -1003,10 +1013,10 @@
   // 버튼 확대는 한 번에 바뀌지 않고 부드럽게
   function zoomSmooth(f) {
     if (!canZoom()) return;
-    if (step === 'flight' && following) { zoomMul = clamp(zoomMul * f, 0.4, maxZoom() / 2); flyTo(viewFor('flight', dockRect()), 450); return; }
-    zoomMul = clamp(zoomMul * f, 0.4, maxZoom() / 2);
+    zoomMul = mulRange(zoomMul * f);
+    if (step === 'flight' && following) { flyTo(viewFor('flight', dockRect()), 450); return; }
     const target = Object.assign({}, tween ? tween.to : view);
-    target.zoom = clamp(target.zoom * f, 0.4, maxZoom());
+    target.zoom = clamp(target.zoom * f, minZoom(), maxZoom());
     flyTo(target, 450);
   }
   // 비행 중 지도를 손으로 옮기면 따라가기가 꺼지고, 이 버튼을 누르면 다시 비행기를 따라감 (실제 지도 앱처럼)
@@ -1022,7 +1032,7 @@
     if (!following) { // 지금 확대 배율은 그대로 두고 비행기 쪽으로 돌아감
       zoomMul = 1;
       const base = viewFor('flight', dockRect()).zoom;
-      zoomMul = clamp(view.zoom / base, 0.4, maxZoom() / 2);
+      zoomMul = mulRange(view.zoom / base);
     }
     setFollowing(true);
     flyTo(viewFor('flight', dockRect()), 800);
@@ -1359,7 +1369,7 @@
     return AIRPORTS
       .filter((a) => a.code !== depCode)
       .map((a) => { const km = distanceKm(d, a); return { a, km, min: realMinutes(km) }; })
-      .filter((x) => x.km >= 100) // 인천–김포처럼 너무 가까운 구간은 제외
+      .filter((x) => x.km >= 60) // 인천–김포처럼 너무 가까운 구간은 제외
       .map((x) => Object.assign(x, { diff: x.min - prefs.minutes }))
       .sort((x, y) => Math.abs(x.diff) - Math.abs(y.diff) || x.km - y.km);
   }
@@ -2103,7 +2113,7 @@
       li.classList.toggle('is-done', i < idx);
       li.classList.toggle('is-now', i === idx);
       if (i === idx) li.setAttribute('aria-current', 'step'); else li.removeAttribute('aria-current');
-      const txt = i !== idx ? PHASES[i].ko : f.pausedAt ? '일시정지' : `${PHASES[i].ko} · ${fmtLeft((B[i + 1] - p) * f.minutes)}`;
+      const txt = i !== idx ? PHASES[i].ko : f.pausedAt ? '일시정지' : `${PHASES[i].ko} · ${fmtLeftShort((B[i + 1] - p) * f.minutes)}`;
       const ko = li.querySelector('.ph-ko');
       if (ko.textContent !== txt) ko.textContent = txt;
     });
@@ -2121,7 +2131,7 @@
     $('f-subject').textContent = f.subject;
     $('f-subject').style.background = subjectColor(SUBJECTS.some((s) => s.n === f.subject) ? f.subject : '기타');
     $('abort-confirm').hidden = true;
-    $('btn-abort').hidden = false;
+    flightPane.classList.remove('confirming');
     $('btn-voice').setAttribute('aria-pressed', String(prefs.voice));
     renderNotifyBtn();
     flightPane.classList.toggle('mini', !!prefs.flightMini);
@@ -2129,12 +2139,24 @@
     renderPause();
     const p = progressOf(f, Date.now());
     renderPhases(f, p);
+    fitFlightPane();
     // 새로고침 뒤에는 지난 방송을 다시 울리지 않고 문구만 보여 줌
     if (f.phase >= 0) setPA(announcement(f, f.phase, p), Date.now());
     lastText = 0;
     updateTexts(f, p, Date.now());
   }
 
+  function setUnit(id, num, unit) {
+    const html = `${num}<span class="u">${unit}</span>`;
+    if ($(id).innerHTML !== html) $(id).innerHTML = html;
+  }
+  // 단계 막대용 짧은 남은 시간: 40초 / 12분 / 6:19
+  function fmtLeftShort(min) {
+    const s = Math.max(0, Math.round(min * 60));
+    if (s < 60) return `${s}초`;
+    const m = Math.ceil(s / 60);
+    return m < 60 ? `${m}분` : `${Math.floor(m / 60)}:${pad(m % 60)}`;
+  }
   function updateTexts(f, p, now) {
     const prof = profileOf(f);
     const s = prof.frac(p);
@@ -2152,14 +2174,15 @@
     $('m-phase').textContent = paused ? '일시정지' : `${PHASES[idx].en} · ${PHASES[idx].ko}`;
     $('f-bar').style.width = (p * 100).toFixed(2) + '%';
     $('m-bar').style.width = (p * 100).toFixed(2) + '%';
-    $('t-alt').textContent = fmtNum(Math.round(prof.alt(p) / 10) * 10) + ' ft';
-    $('t-spd').textContent = fmtNum(spd) + ' km/h';
+    // 단위는 작게: 좁은 화면에서도 숫자가 잘리지 않게
+    setUnit('t-alt', fmtNum(Math.round(prof.alt(p) / 10) * 10), 'ft');
+    setUnit('t-spd', fmtNum(spd), 'km/h');
     $('t-trend').textContent = paused ? '' : spd - before > 0.3 ? '▲ 가속' : before - spd > 0.3 ? '▼ 감속' : '';
     $('t-eta').textContent = paused ? '일시정지' : fmtHM(f.endAt);
     // 마일리지: 정한 시간의 절반이 지나야 쌓이기 시작
     const miles = halfDone(f, now)
-      ? `${fmtNum(flown * KM_TO_MI)} mi <small>적립 중</small>`
-      : `0 mi <small>${fmtLeft((durMs(f) / 2 - elapsedMs(f, now)) / 60000)} 뒤부터 적립</small>`;
+      ? `${fmtNum(milesFor(elapsedMs(f, now)))}<span class="u">mi</span><small>적립 중</small>`
+      : `0<span class="u">mi</span><small>${fmtLeft((durMs(f) / 2 - elapsedMs(f, now)) / 60000)} 뒤부터</small>`;
     if ($('t-miles').innerHTML !== miles) $('t-miles').innerHTML = miles;
     const title = `${paused ? '⏸ ' : ''}${clock} · ${f.from}→${f.to}`;
     if (title !== lastTitle) { document.title = title; lastTitle = title; }
@@ -2214,7 +2237,10 @@
     }
     milestones(f, now);
     if (step !== 'flight') return;
-    if (now - lastText >= 1000) { lastText = now; updateTexts(f, p, now); renderPhases(f, p); }
+    if (now - lastText >= 1000) {
+      lastText = now; updateTexts(f, p, now); renderPhases(f, p);
+      if (flightPane.scrollHeight > flightPane.clientHeight + 1) fitFlightPane(); // 방송 문구가 바뀌어 넘치면 다시 맞춤
+    }
     kick(); // 비행기·지도는 frame()에서 부드럽게 그림
   }
   let flightTimer = 0;
@@ -2222,6 +2248,19 @@
   function stopFlightLoop() { clearInterval(flightTimer); flightTimer = 0; }
   // 다른 화면이거나 탭이 백그라운드여도 착륙은 확인
   setInterval(() => { if (flight && !flightTimer) tick(); }, 1000);
+
+  // 비행 창이 화면에 다 들어가게: 넘치면 덜 중요한 것부터 숨김 (스크롤 없음)
+  function fitFlightPane() {
+    const levels = ['tight', 'tighter', 'tightest', 'squeeze'];
+    flightPane.classList.remove(...levels);
+    if (flightPane.hidden || flightPane.classList.contains('mini')) return;
+    for (const c of levels) {
+      if (flightPane.scrollHeight <= flightPane.clientHeight + 1) return;
+      flightPane.classList.add(c);
+    }
+  }
+  window.addEventListener('resize', () => { if (step === 'flight') fitFlightPane(); });
+  if (document.fonts && document.fonts.ready) document.fonts.ready.then(() => { if (step === 'flight') fitFlightPane(); }); // 글꼴이 늦게 오면 글자가 커지므로 다시 맞춤
 
   // ---------- 일시정지 ----------
   function setPaused(on) {
@@ -2251,7 +2290,7 @@
     flightPane.classList.toggle('paused', paused);
     document.body.classList.toggle('is-paused', paused);
     $('btn-pause').setAttribute('aria-pressed', String(paused));
-    setText('btn-pause', paused ? '다시 시작' : '일시정지');
+    setText('btn-pause-t', paused ? '다시 시작' : '일시정지');
     $('btn-pause-mini').setAttribute('aria-pressed', String(paused));
     $('btn-pause-mini').setAttribute('aria-label', paused ? '다시 시작' : '일시정지');
   }
@@ -2276,7 +2315,7 @@
   }
   function setFlightMini(on) {
     prefs.flightMini = on; savePrefs();
-    const apply = () => { flightPane.classList.toggle('mini', on); dock.classList.toggle('mini', on); };
+    const apply = () => { flightPane.classList.toggle('mini', on); dock.classList.toggle('mini', on); fitFlightPane(); };
     if (step !== 'flight') { apply(); return; }
     morphDock(apply, 480);
     (on ? $('btn-expand') : $('btn-collapse')).focus({ preventScroll: true });
@@ -2359,15 +2398,18 @@
     const now = Date.now();
     const min = Math.floor(elapsedMs(flight, now) / 60000);
     const miles = halfDone(flight, now)
-      ? '정한 시간의 절반을 넘겼으니 날아간 거리만큼 마일리지는 받아요.'
+      ? `정한 시간의 절반을 넘겼으니 집중한 시간만큼 마일리지(${fmtNum(milesFor(elapsedMs(flight, now)))} mi)는 받아요.`
       : `정한 시간의 절반(${fmtDur(Math.ceil(flight.minutes / 2))})을 넘기지 않아 마일리지는 없어요.`;
     $('abort-text').textContent = min >= 1
       ? `정말 비행을 중단할까요? 지금까지 집중한 ${fmtDur(min)}은 로그북에 '회항'으로 남고, 착륙 성공으로는 세지 않아요. ${miles}`
       : '정말 비행을 중단할까요? 1분이 지나지 않아 기록은 남지 않아요.';
+    flightPane.classList.add('confirming'); // 확인 창이 들어갈 자리를 방송 칸에서 빌림
     showEl('abort-confirm');
-    hideEl('btn-abort', { opacity: 0, transform: 'scale(0.9)' });
+    fitFlightPane();
   });
-  $('abort-cancel').addEventListener('click', () => { hideEl('abort-confirm').then(() => showEl('btn-abort', { opacity: 0, transform: 'scale(0.9)' })); });
+  $('abort-cancel').addEventListener('click', () => {
+    hideEl('abort-confirm').then(() => { flightPane.classList.remove('confirming'); fitFlightPane(); });
+  });
   $('abort-ok').addEventListener('click', () => land(true));
 
   // ---------- 5. 도착 / 회항 ----------
@@ -2400,7 +2442,7 @@
       id: f.startAt, date: f.startAt, landedAt: now, flightNo: f.flightNo,
       from: f.from, to: diverted ? f.from : f.to, plannedTo: f.to,
       subject: f.subject, aircraft: f.aircraft, minutes: f.minutes, focusedMin,
-      km: kmFlown, miles: earn ? Math.round(kmFlown * KM_TO_MI) : 0,
+      km: kmFlown, miles: earn ? milesFor(el) : 0,
       status: diverted ? 'diverted' : 'arrived',
     };
     log.unshift(entry);
@@ -2430,7 +2472,7 @@
     if (e.status === 'diverted') {
       $('a-title').textContent = `${dest.city}${euro(dest.city)} 회항했어요`;
       $('a-sub').textContent = e.miles > 0
-        ? `${e.subject} 비행을 중간에 멈췄어요. 집중한 ${fmtDur(e.focusedMin)}과 날아간 거리만큼의 마일은 기록에 남았어요.`
+        ? `${e.subject} 비행을 중간에 멈췄어요. 집중한 ${fmtDur(e.focusedMin)}과 그 시간만큼의 마일은 기록에 남았어요.`
         : `${e.subject} 비행을 중간에 멈췄어요. 집중한 ${fmtDur(e.focusedMin)}은 기록에 남았지만, 정한 시간의 절반을 넘기지 않아 마일리지는 없어요.`;
     } else {
       $('a-title').textContent = `${dest.city}에 도착했어요`;
