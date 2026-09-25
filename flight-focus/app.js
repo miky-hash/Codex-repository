@@ -967,8 +967,9 @@
   const pxPerKmAt1 = (r) => { const f = camF(); return (tilesOn() ? (r * r + r * Math.sqrt(r * r + f * f)) / f : r) / 6371; };
   // 화면 가운데에서 가장자리까지 halfKm가 들어가게 하는 배율
   const zoomForHalfKm = (r, halfPx, halfKm) => (halfPx / halfKm) / pxPerKmAt1(r);
-  // 도착지 단계: 항로와 주변 공항이 보일 만큼 확대해서 시작 (가까운 곳도 반경 600km는 보이게, 먼 곳은 지구 전체)
-  const routeZoom = (r, routeKm) => clamp(zoomForHalfKm(r, r * 0.95, Math.max(routeKm * 0.75, 600)), 1, 40);
+  // 도착지 단계: 항로 길이와 상관없이 도착지를 가운데 두고 반경 약 400km(주변 공항이 보일 만큼)만 보이게
+  const DEST_HALF_KM = 400;
+  const destZoom = (r) => clamp(zoomForHalfKm(r, r * 0.95, DEST_HALF_KM), 1, 60);
   let zoomMul = 1; // 사용자가 손가락·휠·버튼으로 바꾼 배율
 
   // 확대·축소 한계: 비행 중에는 지구 전체가 보일 때까지 축소할 수 있음
@@ -985,10 +986,9 @@
     if (s === 'route') {
       const x = selected();
       if (x) {
-        const A = lonlat(dep), B = lonlat(x.a);
-        center = d3.geoInterpolate(A, B)(0.5);
-        zoom = routeZoom(slot.r, x.km);
+        center = lonlat(x.a);
       }
+      zoom = destZoom(slot.r); // 고른 도착지가 없으면 출발지 주변
     } else if (s === 'flight' && flight) {
       const A = lonlat(AP[flight.from]), B = lonlat(AP[flight.to]);
       const p = progressOf(flight, Date.now());
