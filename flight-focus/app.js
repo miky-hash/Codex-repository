@@ -576,8 +576,23 @@
     A380: { L: 72.7, w: 7.1, span: 79.8, sweep: 19, rc: 17, tc: 3, eng: [0.26, 0.47], ew: 3, el: 6.6, hs: 30.4, sharklet: true },
   };
   const PX_PER_M = 1.05;
-  const planeImgs = {}; // planes/<기종>.png 가 있으면 그 그림을 씀 (위에서 본 모습, 기수가 위쪽)
-  AIRCRAFT.forEach((a) => { const img = new Image(); img.onload = () => { planeImgs[a.id] = img; kick(); }; img.src = `planes/${a.id}.png`; });
+  const planeImgs = {}, planeShadows = {}; // planes/<기종>.png 가 있으면 그 그림을 씀 (위에서 본 모습, 기수가 위쪽)
+  AIRCRAFT.forEach((a) => {
+    const img = new Image();
+    img.onload = () => {
+      // 그림자용 검은 실루엣을 한 번만 만들어 둠 (캔버스 filter가 없는 브라우저에서도 똑같이 보이게)
+      const c = document.createElement('canvas');
+      c.width = img.width; c.height = img.height;
+      const g = c.getContext('2d');
+      g.drawImage(img, 0, 0);
+      g.globalCompositeOperation = 'source-in';
+      g.fillStyle = '#000'; g.fillRect(0, 0, c.width, c.height);
+      planeShadows[a.id] = c;
+      planeImgs[a.id] = img;
+      kick();
+    };
+    img.src = `planes/${a.id}.png`;
+  });
   function aircraftPath(g) { // 동체·날개·꼬리날개 윤곽 (기수가 +x)
     const p = new Path2D();
     const xl = g.L * 0.1, hsp = g.span / 2;
@@ -622,9 +637,10 @@
     ctx.translate(x, y);
     if (img) {
       const len = g.L * k * 1.05, wid = len * img.width / img.height;
+      ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = 'high';
       ctx.save(); ctx.translate(shadowOff, shadowOff); ctx.rotate(ang + Math.PI / 2);
-      ctx.globalAlpha = 0.3; ctx.filter = 'brightness(0)';
-      ctx.drawImage(img, -wid / 2, -len / 2, wid, len); ctx.restore();
+      ctx.globalAlpha = 0.3;
+      ctx.drawImage(planeShadows[id], -wid / 2, -len / 2, wid, len); ctx.restore();
       ctx.rotate(ang + Math.PI / 2);
       ctx.drawImage(img, -wid / 2, -len / 2, wid, len);
       ctx.restore();
