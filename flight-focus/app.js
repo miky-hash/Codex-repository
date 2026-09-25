@@ -969,7 +969,7 @@
   const zoomForHalfKm = (r, halfPx, halfKm) => (halfPx / halfKm) / pxPerKmAt1(r);
   // 도착지 단계: 항로 길이와 상관없이 도착지를 가운데 두고 반경 약 400km(주변 공항이 보일 만큼)만 보이게
   const DEST_HALF_KM = 400;
-  const FOLLOW_HALF_KM = 1500; // 비행기 따라가기 버튼을 눌렀을 때 보이는 반경
+  const FOLLOW_HALF_KM = 300; // 비행기를 따라갈 때(처음 비행 화면·따라가기 버튼) 비행기 주변으로 보이는 반경
   const destZoom = (r) => clamp(zoomForHalfKm(r, r * 0.95, DEST_HALF_KM), 1, 60);
   let zoomMul = 1; // 사용자가 손가락·휠·버튼으로 바꾼 배율
 
@@ -994,8 +994,8 @@
       const A = lonlat(AP[flight.from]), B = lonlat(AP[flight.to]);
       const p = progressOf(flight, Date.now());
       center = d3.geoInterpolate(A, B)(profileOf(flight).frac(p));
-      const dist = Math.min(d3.geoDistance(A, B), Math.PI / 2);
-      zoom = clamp((slot.area * 0.42) / (slot.r * Math.sin(Math.max(dist, 0.004))), 0.15, 30);
+      // 항로 전체가 아니라 비행기 주변(반경 FOLLOW_HALF_KM)만 크게
+      zoom = Math.max(0.15, zoomForHalfKm(slot.r, (slot.area || Math.min(W, H)) * 0.45, FOLLOW_HALF_KM));
       flightBase = zoom;
     } else if (s === 'arrive' && lastEntry && AP[lastEntry.to]) {
       center = lonlat(AP[lastEntry.to]);
@@ -1155,11 +1155,8 @@
   }
   $('btn-follow').addEventListener('click', () => {
     if (step !== 'flight' || !flight) return;
-    // 비행기 쪽으로 돌아가면서 주변(반경 약 1,500km)이 보이는 배율로 맞춤 (더 확대돼 있었으면 그만큼 축소)
+    // 비행기 쪽으로 돌아가면서 기본 따라가기 배율(비행기 주변 반경 약 300km)로 되돌림
     zoomMul = 1;
-    const v0 = viewFor('flight', dockRect());
-    const close = zoomForHalfKm(v0.r, (v0.area || Math.min(W, H)) * 0.45, FOLLOW_HALF_KM);
-    zoomMul = mulRange(close / v0.zoom);
     setFollowing(true);
     flyTo(viewFor('flight', dockRect()), 800);
   });
