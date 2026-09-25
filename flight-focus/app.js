@@ -117,11 +117,11 @@
     const key = f.seed + ':' + f.minutes + ':' + f.km;
     if (profileCache.has(key)) return profileCache.get(key);
     const T = f.minutes;
-    // 느린 단계는 짧게, 빠른 순항 비중은 크게 (60분 비행이면 순항 약 77%)
-    const g = Math.min(0.03, 3 / T); // 탑승구: 푸시백·지상 이동 (최대 3분)
-    const c = Math.min(0.07, 8 / T); // 이륙·상승 (최대 8분)
-    const d = Math.min(0.1, 12 / T); // 하강 (최대 12분)
-    const l = Math.min(0.03, 4 / T); // 착륙: 접지·지상 이동 (최대 4분)
+    // 느린 단계는 짧게, 빠른 순항 비중은 크게 (60분 비행이면 순항 약 88%)
+    const g = Math.min(0.02, 2 / T); // 탑승구: 푸시백·지상 이동 (최대 2분)
+    const c = Math.min(0.04, 4 / T); // 이륙·상승 (최대 4분)
+    const d = Math.min(0.04, 4 / T); // 하강 (최대 4분)
+    const l = Math.min(0.02, 2 / T); // 착륙: 접지·지상 이동 (최대 2분)
     const b = [g, g + c, 1 - d - l, 1 - l];
     const r = rng(f.seed);
     const ph = [r() * 6.283, r() * 6.283, r() * 6.283, r() * 6.283];
