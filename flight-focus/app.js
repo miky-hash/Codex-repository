@@ -337,6 +337,7 @@
     builtinFlat: 'Natural Earth',
   };
   let ml = null, mlReady = false, mlCap = Math.PI / 2, baseStyle = null, tilesFailed = false;
+  let camMoving = false; // 앱이 카메라를 계속 옮기는 중인지 (비행기 따라가기·전환 애니메이션·손으로 끌기)
   const tilesOn = () => !!(ml && mlReady);
   const mapMode = () => (MAP_MODES[prefs.mapStyle] ? prefs.mapStyle : 'satellite');
   const camF = () => 1.5 * H; // MapLibre 기본 시야각(36.87°)에서 카메라~화면 거리
@@ -406,6 +407,10 @@
         container: 'mlmap', style: buildStyle(mapMode()), interactive: false, attributionControl: false,
         center: [view.lon, view.lat], zoom: 1, minZoom: -2, maxZoom: 19, fadeDuration: 200, renderWorldCopies: false,
       });
+      // MapLibre는 지도가 멈춰 있다고 보면 위성 사진을 픽셀 격자에 딱 맞춰 그림. 카메라를 매 프레임 직접 옮기는 동안에도
+      // 그렇게 하면 크게 확대했을 때 사진만 1픽셀씩 끊겨 움직여서, 글자·선과 어긋나 흔들려 보임 → 옮기는 동안은 "움직이는 중"으로 알림
+      const baseIsMoving = ml.isMoving.bind(ml);
+      ml.isMoving = () => camMoving || baseIsMoving();
       ml.on('load', () => {
         mlReady = true;
         $('earth').hidden = true;
@@ -522,6 +527,8 @@
       Object.assign(view, lerpView(tween.from, tween.to, ease(t)));
       if (t >= 1) tween = null;
     }
+    // 움직이는 동안은 부드럽게, 멈추면 마지막 프레임에서 사진을 다시 또렷하게(격자에 맞춰) 그림
+    camMoving = !!tween || !!(gdrag && gdrag.moved) || !!pinch || (flying && following && !flight.pausedAt);
     if (tilesOn()) syncMap();
     else if (globeGL) {
       const on = builtinSat();
@@ -977,8 +984,9 @@
   });
   const endPointer = (e) => {
     pts.delete(e.pointerId);
-    if (pts.size < 2) pinch = null;
+    if (pts.size < 2 && pinch) { pinch = null; kick(); } // 손을 떼면 한 번 더 그려서 위성 사진을 또렷하게
     if (!gdrag) return;
+    if (gdrag.moved) kick();
     const tap = !gdrag.moved && e.type === 'pointerup';
     gdrag = null;
     if (tap) { const hit = chipAt(e.clientX, e.clientY); if (hit) onChipTap(hit.code); }
