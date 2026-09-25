@@ -1347,9 +1347,6 @@
       .map((x) => Object.assign(x, { diff: x.min - prefs.minutes }))
       .sort((x, y) => Math.abs(x.diff) - Math.abs(y.diff) || x.km - y.km);
   }
-  // 내 시간으로 날 때 속도는 실제의 0.5배~2배까지만 (그 밖은 비현실적이라 막음)
-  const SPEED_MAX = 2, SPEED_MIN = 0.5;
-  const mineOk = (x) => x.min / prefs.minutes <= SPEED_MAX && x.min / prefs.minutes >= SPEED_MIN;
   const selected = () => (sel.to ? routes().find((x) => x.a.code === sel.to) || null : null);
   function pickBest() {
     const rs = routes();
@@ -1440,10 +1437,7 @@
     if (!x) { setText('dest-name', '-'); setText('route-note', ''); return; }
     setText('dest-name', `${x.a.code} · ${x.a.city}`);
     const same = x.diff === 0;
-    const blocked = !same && !mineOk(x);
-    if (same || blocked) sel.mode = 'real';
-    $('mode-mine').disabled = blocked;
-    $('mode-seg').classList.toggle('mine-blocked', blocked);
+    if (same) sel.mode = 'real';
     $('mode-seg').classList.toggle('is-off', same);
     $('mode-seg').dataset.mode = sel.mode; // 흰 손잡이가 미끄러지듯 이동
     setText('mode-real-t', fmtHHMM(x.min));
@@ -1457,14 +1451,10 @@
     if (sel.mode === 'real') {
       note = same ? '정한 집중 시간과 실제 비행시간이 같아요.'
         : `실제 비행시간 ${fmtHHMM(x.min)} 동안 날아요. 정한 시간보다 ${fmtDur(Math.abs(x.diff))} ${x.diff > 0 ? '길어요' : '짧아요'}.`;
-      if (blocked) {
-        const fast = x.min > prefs.minutes;
-        note += ` 내 시간(${fmtHHMM(prefs.minutes)})으로 가려면 실제보다 ${fast ? `${fmtNum((x.min / prefs.minutes - 1) * 100)}% 빠르게` : `${fmtNum((1 - x.min / prefs.minutes) * 100)}% 느리게`} 날아야 해서 고를 수 없어요. 내 시간은 실제의 절반~2배 속도까지만 돼요.`;
-      }
     } else {
       const pct = Math.round((x.min / prefs.minutes - 1) * 100);
       note = Math.abs(pct) < 3 ? '실제와 거의 같은 속도로 날아요.'
-        : `정한 시간 ${fmtHHMM(prefs.minutes)}에 맞춰 실제보다 ${Math.abs(pct)}% ${pct > 0 ? '빠르게' : '느리게'} 날아요.`;
+        : `정한 시간 ${fmtHHMM(prefs.minutes)}에 맞춰 실제보다 ${fmtNum(Math.abs(pct))}% ${pct > 0 ? '빠르게' : '느리게'} 날아요.`;
     }
     setText('route-note', note);
   }
@@ -1512,7 +1502,7 @@
     if (c) selectDest(c.dataset.code);
   });
   $('mode-real').addEventListener('click', () => { sel.mode = 'real'; renderRouteSummary(); });
-  $('mode-mine').addEventListener('click', () => { const x = selected(); if (x && mineOk(x)) { sel.mode = 'mine'; renderRouteSummary(); } });
+  $('mode-mine').addEventListener('click', () => { sel.mode = 'mine'; renderRouteSummary(); });
   $('btn-change-time').addEventListener('click', () => go('time'));
   $('btn-go').addEventListener('click', () => { if (selected()) openSheet(); });
 
