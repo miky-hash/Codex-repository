@@ -244,7 +244,7 @@
   const gpath = HAS_GEO ? d3.geoPath(proj, ctx) : null;
   const GRAT = HAS_GEO ? d3.geoGraticule10() : null;
   const SPHERE = { type: 'Sphere' };
-  const W50 = window.WORLD50 || null;
+  let W50 = window.WORLD50 || null;
   const STARS = (() => { const r = rng(42); return Array.from({ length: 220 }, () => ({ x: r(), y: r(), s: r() < 0.9 ? 1 : 2, a: 0.2 + r() * 0.6 })); })();
   let W = 1, H = 1, DPR = 1;
   const view = { cx: 0, cy: 0, r: 100, lon: 127, lat: 37, zoom: 1 };
@@ -253,7 +253,31 @@
   let chipHits = [];
 
   // 위성 사진 지구: 화면의 각 점을 정사영 역변환해서 NASA 블루 마블 사진에서 색을 가져옴
-  const globeGL = initGlobeGL($('earth'));
+  let globeGL = null;
+  let fallbackWanted = false, earthLoading = false, detailLoading = false;
+  // 인터넷 지도에서는 쓰지 않는 큰 예비 자료는 실제로 필요할 때만 읽음.
+  function ensureFallback() {
+    if (!fallbackWanted || tilesOn() || !HAS_GEO) return;
+    if (mapMode() === 'satellite' && !earthLoading) {
+      earthLoading = true;
+      loadScript('earth-texture.js').then(() => {
+        if (tilesOn()) return;
+        globeGL = initGlobeGL($('earth'));
+        if (globeGL) globeGL.resize();
+        lastCam = null;
+        kick();
+      }, () => {}); // 자료가 없어도 가벼운 기본 지구본은 계속 사용
+    }
+    if (view.zoom > 1.6 && !W50 && !detailLoading) {
+      detailLoading = true;
+      loadScript('world50.js').then(() => { W50 = window.WORLD50 || null; kick(); }, () => {});
+    }
+  }
+  function useFallback() {
+    fallbackWanted = true;
+    ensureFallback();
+    kick();
+  }
   function initGlobeGL(canvas) {
     if (!window.EARTH_JPG) return null;
     let gl = null;
@@ -319,6 +343,8 @@
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
       gl.uniform1i(U.tex, 0);
       ready = true;
+      lastCam = null;
+      setAttrib();
       kick();
     };
     img.src = window.EARTH_JPG;
@@ -457,7 +483,9 @@
     return new Promise((ok, no) => { const el = document.createElement('script'); el.src = src; el.onload = ok; el.onerror = no; document.head.appendChild(el); });
   }
   async function startTiles() {
-    if (!HAS_GEO || !window.fetch) { tilesFailed = true; return; }
+    if (!HAS_GEO || !window.fetch) { tilesFailed = true; useFallback(); return; }
+    // 스타일은 왔지만 지도 타일이 끝내 준비되지 않는 경우도 예비 지도를 켬.
+    const fallbackTimer = setTimeout(() => { if (!tilesOn()) useFallback(); }, 8000);
     try {
       const ctl = window.AbortController ? new AbortController() : null;
       const timer = setTimeout(() => { if (ctl) ctl.abort(); }, 6000);
@@ -478,6 +506,7 @@
       const baseIsMoving = ml.isMoving.bind(ml);
       ml.isMoving = () => camMoving || baseIsMoving();
       ml.on('load', () => {
+        clearTimeout(fallbackTimer);
         mlReady = true;
         $('earth').hidden = true;
         $('mlmap').classList.add('on');
@@ -486,8 +515,10 @@
       });
       ml.on('error', () => {}); // 타일 하나가 안 와도 전체는 계속
     } catch (e) {
+      clearTimeout(fallbackTimer);
       tilesFailed = true;
       setAttrib();
+      useFallback();
     }
   }
   function syncMap() {
@@ -588,6 +619,8 @@
   }
   function frame(now) {
     raf = 0;
+    ensureFallback();
+    const flightNow = Date.now();
     const flying = step === 'flight' && !!flight;
     // 비행 중에는 앞쪽 점선이 비행기 쪽으로 흘러오게 계속 그림 (초당 약 30번, 일시정지하면 멈춤)
     const flowing = flying && !flight.pausedAt && !REDUCED;
@@ -595,9 +628,9 @@
     if (!busy && flowing && now - lastDrawAt < 30) { kick(); return; }
     lastDrawAt = now;
     if (flying) {
-      flightGeometry();
+      flightGeometry(flightNow);
       if (following) { // 비행기 따라가기: 목표 자리를 매 프레임 새로 계산
-        const v = viewFor('flight', dockRect());
+        const v = viewFor('flight', dockRect(), scene.plane);
         if (tween) tween.to = v; else Object.assign(view, v);
       }
     }
@@ -661,6 +694,19 @@
   function geoLine(line) {
     ctx.beginPath();
     if (!tilesOn()) { gpath(line); return; }
+    if (line.route) {
+      const route = line.route;
+      let pen = false;
+      const point = (ll) => {
+        const p = projectVisible(ll);
+        if (!p) { pen = false; return; }
+        if (pen) ctx.lineTo(p[0], p[1]); else { ctx.moveTo(p[0], p[1]); pen = true; }
+      };
+      point(line.coordinates[0]);
+      for (let i = Math.floor(line.fromFrac * route.n) + 1; i < line.toFrac * route.n; i++) point(route.points[i]);
+      point(line.coordinates[1]);
+      return;
+    }
     const [A, B] = line.coordinates;
     const n = clamp(Math.ceil(d3.geoDistance(A, B) / 0.004), 2, 500);
     const interp = d3.geoInterpolate(A, B);
@@ -684,7 +730,10 @@
   };
   const PX_PER_M = 1.05;
   const planeImgs = {}, planeShadows = {}; // planes/<기종>.png 가 있으면 그 그림을 씀 (위에서 본 모습, 기수가 위쪽)
-  AIRCRAFT.forEach((a) => {
+  const planeLoading = new Set();
+  function loadPlane(id) {
+    if (planeLoading.has(id) || !ACMAP[id]) return;
+    planeLoading.add(id);
     const img = new Image();
     img.onload = () => {
       // 그림자용 검은 실루엣을 한 번만 만들어 둠 (캔버스 filter가 없는 브라우저에서도 똑같이 보이게)
@@ -694,12 +743,12 @@
       g.drawImage(img, 0, 0);
       g.globalCompositeOperation = 'source-in';
       g.fillStyle = '#000'; g.fillRect(0, 0, c.width, c.height);
-      planeShadows[a.id] = c;
-      planeImgs[a.id] = img;
+      planeShadows[id] = c;
+      planeImgs[id] = img;
       kick();
     };
-    img.src = `planes/${a.id}.png`;
-  });
+    img.src = `planes/${id}.png`;
+  }
   function aircraftPath(g) { // 동체·날개·꼬리날개 윤곽 (기수가 +x)
     const p = new Path2D();
     const xl = g.L * 0.1, hsp = g.span / 2;
@@ -736,6 +785,7 @@
     return p;
   }
   function drawAircraft(x, y, ang, id, altFrac) {
+    loadPlane(id);
     const g = AC_SHAPE[id] || AC_SHAPE.A321;
     const k = PX_PER_M;
     const shadowOff = 3 + clamp(altFrac, 0, 1) * 16; // 높이 날수록 그림자가 멀어짐
@@ -978,7 +1028,7 @@
   const minZoom = () => (step === 'flight' ? flightMinZoom() : 0.4);
   let flightBase = 1; // 비행 중 기본 배율 (사용자 배율 zoomMul을 곱하기 전)
   const mulRange = (m) => clamp(m, step === 'flight' ? flightMinZoom() / flightBase : 0.4, maxZoom() / 2);
-  function viewFor(s, d) {
+  function viewFor(s, d, planePosition) {
     const slot = slotFor(s, d);
     const dep = AP[depCode];
     let center = lonlat(dep);
@@ -991,9 +1041,7 @@
       }
       zoom = destZoom(slot.r); // 고른 도착지가 없으면 출발지 주변
     } else if (s === 'flight' && flight) {
-      const A = lonlat(AP[flight.from]), B = lonlat(AP[flight.to]);
-      const p = progressOf(flight, Date.now());
-      center = d3.geoInterpolate(A, B)(profileOf(flight).frac(p));
+      center = planePosition || flightPathOf(flight).interpolate(profileOf(flight).frac(progressOf(flight, Date.now())));
       // 항로 전체가 아니라 비행기 주변(반경 FOLLOW_HALF_KM)만 크게
       zoom = Math.max(0.15, zoomForHalfKm(slot.r, (slot.area || Math.min(W, H)) * 0.45, FOLLOW_HALF_KM));
       flightBase = zoom;
@@ -1021,6 +1069,7 @@
     } else if (step === 'flight' && flight) {
       scene.chips = [chip(flight.to, 'sel'), chip(flight.from, 'here')];
       const ac = ACMAP[flight.aircraft];
+      loadPlane(ac.id);
       scene.size = ac.size; scene.engines = ac.engines; scene.acId = ac.id;
       flightGeometry();
     } else if (step === 'arrive' && lastEntry) {
@@ -1029,16 +1078,26 @@
     kick();
   }
 
-  function flightGeometry() {
+  let flightPath = null;
+  function flightPathOf(f) {
+    const key = f.from + ':' + f.to;
+    if (flightPath && flightPath.key === key) return flightPath;
+    const A = lonlat(AP[f.from]), B = lonlat(AP[f.to]);
+    const interpolate = d3.geoInterpolate(A, B);
+    const n = clamp(Math.ceil(d3.geoDistance(A, B) / 0.004), 2, 500);
+    flightPath = { key, A, B, interpolate, n, points: Array.from({ length: n + 1 }, (_, i) => interpolate(i / n)) };
+    return flightPath;
+  }
+  function flightGeometry(now = Date.now()) {
     if (!HAS_GEO || !flight) return;
-    const A = lonlat(AP[flight.from]), B = lonlat(AP[flight.to]);
-    const interp = d3.geoInterpolate(A, B);
-    const s = profileOf(flight).frac(progressOf(flight, Date.now()));
+    const route = flightPathOf(flight), { A, B, interpolate: interp } = route;
+    const p = progressOf(flight, now);
+    const s = profileOf(flight).frac(p);
     const pos = interp(s);
-    scene.done = { type: 'LineString', coordinates: [A, pos] };
-    scene.todo = { type: 'LineString', coordinates: [pos, B] };
+    scene.done = { type: 'LineString', coordinates: [A, pos], route, fromFrac: 0, toFrac: s };
+    scene.todo = { type: 'LineString', coordinates: [pos, B], route, fromFrac: s, toFrac: 1 };
     scene.plane = pos; scene.ahead = interp(s + 0.002);
-    scene.altFrac = profileOf(flight).alt(progressOf(flight, Date.now())) / 41000;
+    scene.altFrac = profileOf(flight).alt(p) / 41000;
   }
 
   // 지구본: 한 손가락(마우스)으로 돌리기, 두 손가락·휠·버튼으로 확대·축소, 공항 칩 누르기
@@ -2233,19 +2292,20 @@
     } catch (e) { return null; }
   }
   // 기내 소음: sounds/cabin.mp3(또는 .ogg/.m4a/.wav) 녹음이 있으면 그걸 끊김 없이 반복, 없으면 합성한 엔진 소리
-  let cabinBuf = null, cabinTried = false;
-  async function loadCabin(c) {
-    if (cabinTried) return cabinBuf;
-    cabinTried = true;
-    for (const f of ['sounds/cabin.mp3', 'sounds/cabin.ogg', 'sounds/cabin.m4a', 'sounds/cabin.wav']) {
-      try {
-        const r = await fetch(f);
-        if (!r.ok) continue;
-        cabinBuf = await c.decodeAudioData(await r.arrayBuffer());
-        return cabinBuf;
-      } catch (e) { /* 다음 형식 시도 */ }
-    }
-    return null;
+  let cabinBuf = null, cabinLoad = null;
+  function loadCabin(c) {
+    if (!cabinLoad) cabinLoad = (async () => {
+      for (const f of ['sounds/cabin.mp3', 'sounds/cabin.ogg', 'sounds/cabin.m4a', 'sounds/cabin.wav']) {
+        try {
+          const r = await fetch(f);
+          if (!r.ok) continue;
+          cabinBuf = await c.decodeAudioData(await r.arrayBuffer());
+          return cabinBuf;
+        } catch (e) { /* 다음 형식 시도 */ }
+      }
+      return null;
+    })();
+    return cabinLoad;
   }
   async function startNoise() {
     const c = ensureAudio();
