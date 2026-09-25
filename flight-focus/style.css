@@ -267,7 +267,6 @@ button:active { transform: scale(0.97); }
 .seg button { position: relative; z-index: 1; border: 0; background: transparent; border-radius: 999px; padding: 6px 8px; font-size: 13px; color: var(--muted); white-space: nowrap; transition: color 250ms var(--ease); }
 .seg button[aria-pressed="true"] { color: var(--ink); }
 .seg.is-off { opacity: 0.35; pointer-events: none; }
-.seg button:disabled { color: #B4B4BB; cursor: not-allowed; text-decoration: line-through; text-decoration-thickness: 1.5px; }
 
 /* 도착지 목록을 넓게: 위쪽 설정 접기 */
 .route-top { display: flex; flex-direction: column; gap: 16px; max-height: 1000px; overflow: hidden; flex: none; transition: max-height 480ms var(--ease), opacity 320ms var(--ease), margin 480ms var(--ease); }
