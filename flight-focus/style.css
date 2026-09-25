@@ -234,6 +234,7 @@ button:active { transform: scale(0.97); }
   height: 44px; display: flex; align-items: center; justify-content: center; gap: 8px; padding: 0 16px;
   scroll-snap-align: center; font-size: 19px; font-weight: 500; color: var(--muted); cursor: pointer;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; will-change: transform;
+  content-visibility: auto; contain-intrinsic-size: auto 44px; /* 화면 밖 칸은 그리기·배치 계산을 건너뜀 */
 }
 .wheel-list li.on { color: var(--ink); font-weight: 700; }
 .wheel-list li small { font-size: 12px; font-weight: 500; color: var(--muted); }
@@ -328,6 +329,14 @@ button:active { transform: scale(0.97); }
 .sr-city small { font-size: 12px; color: var(--muted); }
 .sr-empty, .dest-note { font-size: 13px; color: var(--muted); padding: 10px 6px; }
 .dest-note b { color: var(--ink); }
+/* 처음 화면 공항 검색 (위에서 내려오는 칸) */
+.home-search {
+  position: fixed; z-index: 25; top: calc(16px + env(safe-area-inset-top, 0px)); left: 16px; right: 16px; margin: 0 auto;
+  max-width: 520px; display: grid; gap: 8px; padding: 10px; border-radius: 26px; background: var(--white); box-shadow: var(--shadow);
+}
+.home-results { margin: 0; height: auto; max-height: min(420px, 55vh); }
+.home-results .sr { background: var(--gray-2); }
+.home-results .sr[aria-selected="true"] { box-shadow: inset 0 0 0 2px var(--ink); }
 .more-btn { border: 0; background: transparent; padding: 10px; font-weight: 700; color: var(--muted); border-radius: 12px; }
 
 /* ---------- 과목 시트 ---------- */

@@ -45,6 +45,7 @@
   </div>
   <div class="top-right">
     <span class="pill-white" id="plane-pill">A220-300 · 0 mi</span>
+    <button type="button" class="round" id="btn-search" aria-label="출발 공항 검색" aria-expanded="false" aria-controls="home-search"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5" fill="none" stroke="currentColor" stroke-width="2.2"/><path d="M15.5 15.5 20.5 20.5" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/></svg></button>
     <button type="button" class="round" id="btn-full" aria-label="전체 화면">
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
     </button>
@@ -354,6 +355,12 @@
       <button type="button" class="btn-black" id="am-ok">확인</button>
     </div>
   </div>
+</div>
+
+<!-- 처음 화면: 출발 공항 검색 -->
+<div class="home-search" id="home-search" role="dialog" aria-label="출발 공항 검색" hidden>
+  <div class="search"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5" fill="none" stroke="currentColor" stroke-width="2.2"/><path d="M15.5 15.5 20.5 20.5" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/></svg><input id="home-q" type="search" placeholder="출발 공항 검색 (도시·코드·나라·초성)" autocomplete="off" enterkeyhint="search" aria-label="출발 공항 검색" aria-controls="home-results"><button type="button" class="search-x" id="home-q-x" aria-label="검색 닫기"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7l10 10M17 7 7 17" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg></button></div>
+  <div class="search-results home-results" id="home-results" role="listbox" aria-label="출발 공항 검색 결과"></div>
 </div>
 
 <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>

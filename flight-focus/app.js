@@ -556,6 +556,7 @@
     ctx.closePath();
     ctx.restore();
   }
+  const unitVec = (lon, lat) => { const a = toRad(lon), b = toRad(lat), cb = Math.cos(b); return [cb * Math.cos(a), cb * Math.sin(a), Math.sin(b)]; };
   // 지구 앞면에 보이는 점이면 화면 좌표, 뒤쪽이면 null
   function projectVisible(ll) {
     if (tilesOn()) {
@@ -797,17 +798,28 @@
   }
 
   // 공항 칩: 고른 공항(sel)·출발 공항(here)은 노랑, 나머지는 흰색. 겹치면 덜 중요한 칩은 생략
+  const chipW = new Map(); // 코드별 칩 너비 (글자 폭 재기는 한 번만)
   function drawChips(now) {
-    const placed = [];
     const drawn = [];
     ctx.font = `700 13px ${FONT}`;
+    // 지구 앞면 판정: 화면 가운데 지점과의 각도가 보이는 범위(cap) 안인지, 삼각함수 없이 내적으로
+    const cap = tilesOn() ? mlCap - 0.01 : Math.PI / 2 - 0.02, minDot = Math.cos(cap);
+    const c0 = unitVec(view.lon, view.lat);
+    // 겹침 검사는 64px 격자 칸에 나눠 담아서, 가까운 칸의 칩과만 비교
+    const G = 64, grid = new Map();
+    const cells = (r, fn) => { for (let gx = Math.floor((r.x - 4) / G); gx <= Math.floor((r.x + r.w + 4) / G); gx++) for (let gy = Math.floor((r.y - 4) / G); gy <= Math.floor((r.y + r.h + 4) / G); gy++) fn(gx + ',' + gy); };
     for (const c of scene.chips) {
+      const v = c.v || (c.v = unitVec(c.at[0], c.at[1]));
+      if (v[0] * c0[0] + v[1] * c0[1] + v[2] * c0[2] < minDot) continue; // 지구 뒤편
       const p = frontPoint(c.at);
       if (!p) continue;
-      const w = ctx.measureText(c.code).width + 40, h = 30;
-      const rect = { x: p[0] - w / 2, y: p[1] - h / 2, w, h };
-      if (placed.some((q) => rect.x < q.x + q.w + 4 && q.x < rect.x + rect.w + 4 && rect.y < q.y + q.h + 4 && q.y < rect.y + rect.h + 4)) continue;
-      placed.push(rect);
+      let w = chipW.get(c.code);
+      if (w === undefined) { w = ctx.measureText(c.code).width + 40; chipW.set(c.code, w); }
+      const h = 30, rect = { x: p[0] - w / 2, y: p[1] - h / 2, w, h };
+      let hit = false;
+      cells(rect, (k) => { if (!hit) { const l = grid.get(k); if (l && l.some((q) => rect.x < q.x + q.w + 4 && q.x < rect.x + rect.w + 4 && rect.y < q.y + q.h + 4 && q.y < rect.y + rect.h + 4)) hit = true; } });
+      if (hit) continue;
+      cells(rect, (k) => { const l = grid.get(k); if (l) l.push(rect); else grid.set(k, [rect]); });
       drawn.push({ c, rect });
     }
     for (let i = drawn.length - 1; i >= 0; i--) {
@@ -1072,6 +1084,7 @@
 
   function go(next, instant, slow) {
     if (!$('map-menu').hidden) toggleMapMenu(false);
+    if (!$('home-search').hidden) { $('home-search').hidden = true; $('btn-search').setAttribute('aria-expanded', 'false'); }
     zoomMul = 1;
     setFollowing(true);
     if (next !== 'route' && $('dest-q').value) { $('dest-q').value = ''; $('dest-q-x').hidden = true; } // 경로 화면을 떠나면 도착지 검색어는 비움
@@ -1236,6 +1249,44 @@
     renderHomeLoc(true);
   }
   $('btn-journey').addEventListener('click', () => openAirportModal(homeSel));
+
+  // 처음 화면 공항 검색: 고르면 그 공항이 노랗게 되고 지구본이 그쪽으로 돌아감 (확인은 출발 버튼에서)
+  const HS_ANIM = { opacity: 0, transform: 'translateY(-10px)' };
+  function openHomeSearch() {
+    $('home-q').value = '';
+    renderHomeResults();
+    showEl('home-search', HS_ANIM);
+    $('btn-search').setAttribute('aria-expanded', 'true');
+    $('home-q').focus();
+  }
+  function closeHomeSearch() {
+    if ($('home-search').hidden) return;
+    hideEl('home-search', HS_ANIM);
+    $('btn-search').setAttribute('aria-expanded', 'false');
+  }
+  function renderHomeResults() {
+    const q = $('home-q').value;
+    if (!hasQuery($('home-q'))) {
+      $('home-results').innerHTML = `<p class="sr-empty">도시 이름(도쿄), 영어(tokyo), 공항 코드(NRT), 나라(일본), 초성(ㄷㅋ)으로 찾아요. 지금 ${AIRPORTS.length}곳이 있어요.</p>`;
+      return;
+    }
+    const rs = searchAirports(q).slice(0, 30);
+    $('home-results').innerHTML = rs.length ? rs.map(({ a }) => `<button type="button" class="sr" role="option" data-code="${a.code}" aria-selected="${a.code === homeSel}">
+        <span class="ychip">${a.code}</span><span class="sr-city"><b>${esc(a.city)}</b><small>${esc(a.country)} · ${esc(a.en)}${a.code === loc ? ' · 현재 위치' : ` · 여기서 ${fmtKm(distanceKm(AP[loc], a))}`}</small></span></button>`).join('')
+      : '<p class="sr-empty">찾는 공항이 없어요. 도시 이름, 공항 코드(예: NRT), 나라 이름이나 초성(예: ㅇㅊ)으로 찾아 보세요.</p>';
+  }
+  function pickHomeFromSearch(code) { closeHomeSearch(); selectHome(code); }
+  $('btn-search').addEventListener('click', () => ($('home-search').hidden ? openHomeSearch() : closeHomeSearch()));
+  $('home-q').addEventListener('input', renderHomeResults);
+  $('home-q').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { const first = $('home-results').querySelector('.sr'); if (first) pickHomeFromSearch(first.dataset.code); }
+    if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeHomeSearch(); }
+  });
+  $('home-q-x').addEventListener('click', closeHomeSearch);
+  $('home-results').addEventListener('click', (e) => { const b = e.target.closest('.sr'); if (b) pickHomeFromSearch(b.dataset.code); });
+  document.addEventListener('pointerdown', (e) => { // 바깥을 누르면 닫힘
+    if (!$('home-search').hidden && !e.target.closest('#home-search') && !e.target.closest('#btn-search')) closeHomeSearch();
+  });
   $('btn-log').addEventListener('click', () => go('log'));
 
   // 전체 화면 + (휴대폰이면) 가로 고정. 안 되는 환경이면 안내만 함
@@ -1287,14 +1338,20 @@
     const list = el.querySelector('.wheel-list');
     const w = { items: [], idx: 0 };
     let lis = [];
-    const rowH = () => (lis[0] && lis[0].offsetHeight) || 44;
+    const rowH = () => 44; // 칸 높이는 CSS에서 44px로 고정 (재면 수백 칸 목록의 배치를 매번 다시 계산해서 느려짐)
+    // 보이는 칸(가운데 ±6칸)만 다시 계산: 항목이 수백 개여도 굴릴 때 가벼움
+    let painted = [];
     function paint() {
       const c = list.scrollTop / rowH();
-      lis.forEach((li, i) => {
-        const d = i - c, ad = Math.min(Math.abs(d), 3);
+      const lo = Math.max(0, Math.floor(c) - 6), hi = Math.min(lis.length - 1, Math.ceil(c) + 6);
+      painted.forEach((i) => { if ((i < lo || i > hi) && lis[i]) lis[i].classList.remove('on'); });
+      painted = [];
+      for (let i = lo; i <= hi; i++) {
+        const li = lis[i], d = i - c, ad = Math.min(Math.abs(d), 3);
         li.style.transform = `perspective(500px) rotateX(${(-d * 20).toFixed(1)}deg) scale(${(1 - ad * 0.07).toFixed(3)})`;
         li.classList.toggle('on', Math.abs(d) < 0.5);
-      });
+        painted.push(i);
+      }
     }
     const scrollToIdx = (i, smooth) => list.scrollTo({ top: i * rowH(), behavior: smooth && !REDUCED ? 'smooth' : 'auto' });
     function mark(i) {
@@ -1318,6 +1375,7 @@
       w.items = items;
       list.innerHTML = items.map((it, i) => `<li role="option" id="${el.id}-o${i}" data-i="${i}">${it.t}</li>`).join('');
       lis = [...list.children];
+      painted = [];
       w.set(value);
     };
     w.set = (value) => {
@@ -1386,15 +1444,25 @@
   $('btn-to-route').addEventListener('click', () => { if (prefs.minutes > 0) go('route'); });
 
   // ---------- 2. 출발지 / 도착지 ----------
+  // 출발지에서 모든 공항까지 거리는 출발지가 바뀔 때만 계산하고, 정렬 결과는 출발지·시간이 같으면 다시 씀
+  let legsDep = '', legs = [], routesKey = '', routesCache = [];
   function routes() {
-    const d = AP[depCode];
-    return AIRPORTS
-      .filter((a) => a.code !== depCode)
-      .map((a) => { const km = distanceKm(d, a); return { a, km, min: realMinutes(km) }; })
-      .filter((x) => x.km >= 60) // 인천–김포처럼 너무 가까운 구간은 제외
-      .map((x) => Object.assign(x, { diff: x.min - prefs.minutes }))
-      .sort((x, y) => Math.abs(x.diff) - Math.abs(y.diff) || x.km - y.km);
+    if (legsDep !== depCode) {
+      const d = AP[depCode];
+      legs = AIRPORTS.filter((a) => a.code !== depCode)
+        .map((a) => { const km = distanceKm(d, a); return { a, km, min: realMinutes(km) }; })
+        .filter((x) => x.km >= 60); // 인천–김포처럼 너무 가까운 구간은 제외
+      legsDep = depCode; routesKey = '';
+    }
+    const key = depCode + ':' + prefs.minutes;
+    if (key !== routesKey) {
+      routesCache = legs.map((x) => Object.assign({}, x, { diff: x.min - prefs.minutes }))
+        .sort((x, y) => Math.abs(x.diff) - Math.abs(y.diff) || x.km - y.km);
+      routesKey = key;
+    }
+    return routesCache;
   }
+  const SUGGEST_MAX_DIFF = 180; // 정한 시간과 3시간 넘게 차이 나는 곳은 목록에 제안하지 않음 (검색하면 찾을 수 있음)
   const selected = () => (sel.to ? routes().find((x) => x.a.code === sel.to) || null : null);
   function pickBest() {
     const rs = routes();
@@ -1527,9 +1595,14 @@
     const rs = routes();
     const near1 = rs.filter((x) => Math.abs(x.diff) <= 10);
     const near2 = rs.filter((x) => Math.abs(x.diff) > 10 && Math.abs(x.diff) <= 45);
-    const far = rs.filter((x) => Math.abs(x.diff) > 45);
+    const far = rs.filter((x) => Math.abs(x.diff) > 45 && Math.abs(x.diff) <= SUGGEST_MAX_DIFF);
+    const beyond = rs.length - near1.length - near2.length - far.length; // 3시간 넘게 차이 나서 제안하지 않는 곳
+    const noneWithin = !near1.length && !near2.length && !far.length; // 3시간 안에 맞는 곳이 하나도 없음
     if (!near1.length && !near2.length) showFar = true;
     if (far.some((x) => x.a.code === sel.to)) showFar = true;
+    // 검색으로 3시간 넘게 차이 나는 곳을 골랐으면 목록에도 그 한 곳은 보이게
+    const picked = rs.find((x) => x.a.code === sel.to);
+    if (!noneWithin && picked && Math.abs(picked.diff) > SUGGEST_MAX_DIFF && !far.includes(picked)) { far.push(picked); showFar = true; }
     const group = (title, list) => (list.length
       ? `<div class="dest-group"><span>${title}</span><span>${list.length}곳</span></div>${list.map(destRow).join('')}` : '');
     const searching = hasQuery($('dest-q'));
@@ -1550,8 +1623,16 @@
     } else {
       html = group('딱 맞는 항공편 · ±10분', near1) + group('조금 차이 나는 항공편 · ±45분', near2);
       if (far.length) {
-        html += showFar ? group('그 밖의 항공편', far)
-          : `<button type="button" class="more-btn" id="more-far">그 밖의 항공편 ${far.length}곳 더 보기</button>`;
+        html += showFar ? group('그 밖의 항공편 · ±3시간', far)
+          : `<button type="button" class="more-btn" id="more-far">그 밖의 항공편 ${far.length}곳 더 보기 (±3시간)</button>`;
+      }
+      if (noneWithin && rs.length) {
+        // 3시간 안에 맞는 곳이 하나도 없으면 시간이 가장 가까운 몇 곳만 보여 줌 (검색으로 고른 곳이 있으면 그것도)
+        const few = rs.slice(0, 3);
+        if (picked && !few.includes(picked)) few.push(picked);
+        html = `<p class="dest-note">정한 시간과 3시간 안으로 맞는 항공편이 없어요. 시간이 가장 가까운 곳을 보여 드려요. 다른 곳은 위 검색창으로 찾을 수 있어요.</p>` + group('시간이 가장 가까운 항공편', few);
+      } else if (beyond > 0 && (showFar || !far.length)) {
+        html += `<p class="dest-note">시간이 3시간 넘게 차이 나는 ${fmtNum(beyond)}곳은 목록에서 뺐어요. 위 검색창으로 찾을 수 있어요.</p>`;
       }
     }
     if (html !== lastCards) {
