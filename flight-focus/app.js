@@ -2089,10 +2089,11 @@
   function duck(on) { // 방송하는 동안 엔진 소음을 낮춤
     if (noiseGain && actx) noiseGain.gain.setTargetAtTime(on ? 0.12 : (cabinBuf ? 0.7 : 0.4), actx.currentTime, 0.4);
   }
-  function speak(ann) {
-    if (!HAS_VOICE || !prefs.voice || !ann) return;
+  // 방송 음성을 읽음. 읽기 시작했으면 true, 끝나면 onDone
+  let paToken = 0;
+  function speak(ann, onDone) {
+    if (!HAS_VOICE || !prefs.voice || !ann) return false;
     try {
-      speechSynthesis.cancel();
       const captain = ann.role === 'captain';
       const make = (text, lang, voice) => {
         const u = new SpeechSynthesisUtterance(text);
@@ -2107,11 +2108,48 @@
       const voice = pickVoice('en', captain ? /Guy|Daniel|Arthur|male|UK/i : /Jenny|Aria|Samantha|Libby|female|US/i);
       const parts = ann.en.split(/(?<=[.!?])\s+/).filter(Boolean);
       const us = parts.map((t) => make(t, voice && voice.lang ? voice.lang : 'en-US', voice));
-      if (!us.length) return;
+      if (!us.length) return false;
       us[0].onstart = () => duck(true);
-      us[us.length - 1].onend = () => duck(false);
-      setTimeout(() => us.forEach((u) => speechSynthesis.speak(u)), 1700); // 차임이 끝난 뒤
-    } catch (e) { /* 음성 없음 */ }
+      const last = us[us.length - 1];
+      last.onend = () => onDone && onDone();
+      last.onerror = () => onDone && onDone();
+      const token = paToken;
+      setTimeout(() => { if (token === paToken) us.forEach((u) => speechSynthesis.speak(u)); }, 1700); // 차임이 끝난 뒤
+      return true;
+    } catch (e) { return false; }
+  }
+
+  // 방송 순서 기다리기: 앞 방송(차임 + 음성)이 끝나야 다음 방송을 시작함 (짧은 비행에서 방송이 끊기지 않게)
+  const paQueue = [];
+  let paBusy = false, paTimer = 0;
+  function announce(ann) {
+    if (!ann) return;
+    paQueue.push(ann);
+    if (!paBusy) nextPA();
+  }
+  function nextPA() {
+    clearTimeout(paTimer);
+    const ann = paQueue.shift();
+    if (!ann) { paBusy = false; return; }
+    paBusy = true;
+    setPA(ann, Date.now()); // 화면 문구도 그 방송이 나올 때 바뀜
+    chime();
+    let done = false;
+    const token = paToken; // 취소(clearPA)된 뒤에 늦게 오는 끝 신호는 무시
+    const finish = () => {
+      if (done || token !== paToken) return;
+      done = true; duck(false);
+      paTimer = setTimeout(nextPA, 700); // 방송 사이 잠깐 쉼
+    };
+    if (!speak(ann, finish)) { paTimer = setTimeout(finish, 2600); return; } // 음성이 꺼져 있으면 차임 길이만큼만 기다림
+    // 끝 신호가 오지 않는 브라우저 대비: 글자 수로 길이를 어림해서 그 뒤에는 넘어감
+    paTimer = setTimeout(finish, 1700 + ann.en.length * 90 + 4000);
+  }
+  function clearPA() { // 일시정지·음성 끄기·회항: 남은 방송을 모두 취소
+    paQueue.length = 0; paBusy = false; paToken++;
+    clearTimeout(paTimer);
+    if (HAS_VOICE) { try { speechSynthesis.cancel(); } catch (e) { /* 무시 */ } }
+    duck(false);
   }
   if (!HAS_VOICE) $('btn-voice').hidden = true;
 
@@ -2334,9 +2372,7 @@
       f.phase = idx;
       store.set('flight', f);
       const ann = announcement(f, idx, p);
-      setPA(ann, now);
-      chime();
-      speak(ann);
+      announce(ann); // 앞 방송이 끝난 뒤에 차례로
       if (!first) alertUser(`${PHASES[idx].en} · ${PHASES[idx].ko}`, phaseMsg(f, idx, p));
       if (step === 'flight') renderPhases(f, p);
     }
@@ -2374,7 +2410,7 @@
     const now = Date.now();
     if (on && !f.pausedAt) {
       f.pausedAt = now;
-      if (HAS_VOICE) speechSynthesis.cancel();
+      clearPA();
       if (noiseGain && actx) noiseGain.gain.setTargetAtTime(0, actx.currentTime, 0.3);
       toast('일시정지했어요. 남은 시간과 비행기가 그대로 멈춰 있어요.');
     } else if (!on && f.pausedAt) {
@@ -2490,8 +2526,8 @@
   $('btn-voice').addEventListener('click', () => {
     prefs.voice = !prefs.voice; savePrefs();
     $('btn-voice').setAttribute('aria-pressed', String(prefs.voice));
-    if (prefs.voice && flight && !flight.pausedAt) speak(announcement(flight, Math.max(0, flight.phase), progressOf(flight, Date.now())));
-    else if (HAS_VOICE) speechSynthesis.cancel();
+    clearPA();
+    if (prefs.voice && flight && !flight.pausedAt) announce(announcement(flight, Math.max(0, flight.phase), progressOf(flight, Date.now())));
   });
   $('btn-wake').addEventListener('click', () => {
     if (wakeWanted) { releaseWake(); return; }
@@ -2531,7 +2567,7 @@
     stopFlightLoop();
     stopNoise();
     releaseWake();
-    if (HAS_VOICE) speechSynthesis.cancel();
+    if (diverted) clearPA(); // 착륙이면 하던 방송을 끝까지 듣고 도착 방송이 이어짐
     document.title = BASE_TITLE; lastTitle = '';
 
     if (diverted && focusedMin < 1) {
@@ -2557,8 +2593,7 @@
     if (newAc) { prefs.aircraft = newAc.id; savePrefs(); }
     if (!diverted) {
       loc = depCode = f.to; store.set('loc', loc);
-      chime();
-      speak(announcement(f, 5, 1));
+      announce(announcement(f, 5, 1));
       if (document.hidden) sysNotify(`${AP[f.to].city} 도착! 착륙 성공 ✈`, `${f.subject} ${fmtDur(focusedMin)} 비행을 끝까지 마쳤어요. +${fmtNum(entry.miles)} mi`);
     }
     lastEntry = entry;
