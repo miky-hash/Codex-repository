@@ -222,6 +222,7 @@ button:active { transform: scale(0.97); }
 /* 룰렛(드럼) 휠: 스크롤해서 가운데 칸을 고름 */
 .wheel-drawer { max-height: 0; overflow: hidden; transition: max-height 380ms var(--ease), opacity 280ms var(--ease); opacity: 0; flex: none; }
 .wheel-drawer.open { max-height: 360px; opacity: 1; }
+.wheel-drawer.asleep { content-visibility: hidden; } /* 닫힌 서랍 안은 그리기·배치 계산을 건너뜀 */
 .wheel { position: relative; height: 308px; border-radius: 22px; background: var(--gray-2); overflow: hidden; outline-offset: -3px; }
 .wheel-band { position: absolute; left: 8px; right: 8px; top: 50%; height: 44px; transform: translateY(-50%); border-radius: 999px; background: var(--white); box-shadow: inset 0 0 0 2.5px var(--ink); pointer-events: none; }
 .wheel-list {
@@ -234,7 +235,6 @@ button:active { transform: scale(0.97); }
   height: 44px; display: flex; align-items: center; justify-content: center; gap: 8px; padding: 0 16px;
   scroll-snap-align: center; font-size: 19px; font-weight: 500; color: var(--muted); cursor: pointer;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; will-change: transform;
-  content-visibility: auto; contain-intrinsic-size: auto 44px; /* 화면 밖 칸은 그리기·배치 계산을 건너뜀 */
 }
 .wheel-list li.on { color: var(--ink); font-weight: 700; }
 .wheel-list li small { font-size: 12px; font-weight: 500; color: var(--muted); }
@@ -294,6 +294,7 @@ button:active { transform: scale(0.97); }
   box-shadow: inset 0 0 0 2.5px transparent; transition: box-shadow 160ms var(--ease), background 160ms;
 }
 .dest:hover { background: #E6E6EA; }
+.dest { content-visibility: auto; contain-intrinsic-size: auto 62px; } /* 화면 밖 줄은 건너뜀 (목록이 수백 줄이어도 가볍게) */
 .dest[aria-selected="true"] { background: var(--white); box-shadow: inset 0 0 0 2.5px var(--ink); }
 .dest .ychip { min-width: 76px; justify-content: center; }
 .dest-city { display: grid; min-width: 0; }

@@ -1390,7 +1390,11 @@
   function closeDrawers() {
     const dq = $('dep-q');
     if (dq && dq.value) { dq.value = ''; renderDepResults(); }
-    document.querySelectorAll('.wheel-drawer.open').forEach((d) => d.classList.remove('open'));
+    document.querySelectorAll('.wheel-drawer.open').forEach((d) => {
+      d.classList.remove('open');
+      // 접히는 움직임이 끝나면 안쪽 목록(공항 1,000칸 등)은 배치 계산을 건너뛰게 재움
+      setTimeout(() => { if (!d.classList.contains('open')) d.classList.add('asleep'); }, 450);
+    });
     document.querySelectorAll('[aria-controls^="wd-"]').forEach((b) => b.setAttribute('aria-expanded', 'false'));
     openDrawer = null;
   }
@@ -1398,6 +1402,7 @@
     const willOpen = openDrawer !== id;
     closeDrawers();
     if (!willOpen) return;
+    $(id).classList.remove('asleep');
     $(id).classList.add('open');
     btn.setAttribute('aria-expanded', 'true');
     openDrawer = id;
@@ -1523,7 +1528,7 @@
     $('dep-q-x').hidden = !$('dep-q').value;
     $('wheel-dep').hidden = on;
     $('dep-results').hidden = !on;
-    if (!on) { wheelDep.set(depCode); return; }
+    if (!on) { if (openDrawer === 'wd-dep') wheelDep.set(depCode); return; }
     const rs = searchAirports($('dep-q').value).slice(0, 12);
     $('dep-results').innerHTML = rs.length ? rs.map(({ a }) => `<button type="button" class="sr" role="option" data-code="${a.code}">
         <span class="ychip">${a.code}</span><span class="sr-city"><b>${esc(a.city)}</b><small>${esc(a.country)} · ${esc(a.en)}</small></span></button>`).join('')
@@ -1589,7 +1594,7 @@
     const key = depCode + ':' + prefs.minutes;
     if (key !== selKey || !selected()) { pickBest(); selKey = key; showFar = false; }
     setText('dep-name', `${depCode} · ${AP[depCode].city}`);
-    wheelDep.set(depCode);
+    if (openDrawer === 'wd-dep') wheelDep.set(depCode); // 닫혀 있으면 열 때 맞춤 (닫힌 목록까지 배치 계산하지 않게)
     setText('btn-change-time', fmtHHMM(prefs.minutes));
     fillAircraft();
     const rs = routes();
