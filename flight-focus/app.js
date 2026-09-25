@@ -435,21 +435,31 @@
     const m = mapMode();
     $('attrib').textContent = tilesOn() ? ATTRIB[m] : (m === 'satellite' && satellite() ? ATTRIB.builtinSat : ATTRIB.builtinFlat);
   }
+  let mapFade = null; // 지도 바꿀 때 잠깐 흐리게 하는 애니메이션 (가장 최근 것 하나만 유효)
   function setMapMode(m) {
+    if (m === mapMode()) return; // 이미 고른 지도를 또 누르면 아무것도 안 함
     prefs.mapStyle = m; savePrefs();
     renderMapMenu();
     if (tilesOn()) {
       const el = $('mlmap');
-      let out = null;
-      const swap = () => {
-        ml.setStyle(buildStyle(m));
-        ml.once('styledata', () => {
-          if (out) out.cancel(); // 흐려진 상태를 풀고 다시 또렷하게
-          if (!REDUCED) el.animate([{ opacity: 0.2 }, { opacity: 1 }], { duration: 450, easing: 'ease-out' });
-        });
+      if (mapFade) mapFade.cancel(); // 빠르게 여러 번 바꾸면 앞의 전환은 그만둠
+      const a = REDUCED ? null : el.animate([{ opacity: 1 }, { opacity: 0.2 }], { duration: 160, fill: 'forwards' });
+      mapFade = a;
+      let timer = 0;
+      // 다시 또렷하게: 새 지도가 준비되면, 또는 준비 신호가 안 와도 1.5초 뒤에는 반드시
+      const restore = () => {
+        clearTimeout(timer);
+        if (mapFade !== a) return; // 더 나중에 고른 지도가 있으면 그쪽이 처리
+        mapFade = null;
+        if (a) { a.cancel(); el.animate([{ opacity: 0.2 }, { opacity: 1 }], { duration: 450, easing: 'ease-out' }); }
       };
-      if (REDUCED) swap();
-      else { out = el.animate([{ opacity: 1 }, { opacity: 0.2 }], { duration: 160, fill: 'forwards' }); out.finished.then(swap, swap); }
+      const swap = () => {
+        if (mapFade !== a) return;
+        ml.setStyle(buildStyle(m));
+        ml.once('styledata', restore);
+        timer = setTimeout(restore, 1500);
+      };
+      if (a) a.finished.then(swap, () => {}); else swap();
     } else if (tilesFailed && m !== 'satellite') {
       toast('여기서는 인터넷 지도를 쓸 수 없어서 내장 지도로 보여 줘요. GitHub Pages 주소에서 열면 실제 지도가 나와요.');
     }
