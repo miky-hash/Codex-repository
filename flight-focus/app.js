@@ -117,10 +117,10 @@
     const key = f.seed + ':' + f.minutes + ':' + f.km;
     if (profileCache.has(key)) return profileCache.get(key);
     const T = f.minutes;
-    // 느린 단계는 시간 고정: 탑승구 2분, 이륙 4분, 하강 4분, 착륙 2분. 나머지는 모두 순항
+    // 느린 단계: 탑승구 2분, 이륙 4분, 하강 4분, 착륙 2분 (합계 12분). 나머지는 모두 순항
     let g = 2 / T, c = 4 / T, d = 4 / T, l = 2 / T;
     const slow = g + c + d + l;
-    if (slow > 0.8) { const k = 0.8 / slow; g *= k; c *= k; d *= k; l *= k; } // 15분보다 짧은 비행만: 순항이 20%는 남게 줄임
+    if (slow > 0.2) { const k = 0.2 / slow; g *= k; c *= k; d *= k; l *= k; } // 60분보다 짧은 비행은 같은 비율로 줄여서 순항이 80%는 되게
     const b = [g, g + c, 1 - d - l, 1 - l];
     const r = rng(f.seed);
     const ph = [r() * 6.283, r() * 6.283, r() * 6.283, r() * 6.283];
