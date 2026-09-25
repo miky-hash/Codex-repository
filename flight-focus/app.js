@@ -95,6 +95,12 @@
     return h ? `${h}:${pad(m)}:${pad(s)}` : `${pad(m)}:${pad(s)}`;
   }
   const fmtHM = (t) => { const d = new Date(t); return `${pad(d.getHours())}:${pad(d.getMinutes())}`; };
+  // 지금부터 min분 뒤의 실제 시각 (다음 날이면 '내일', 그 뒤면 '+2일')
+  function endClock(min) {
+    const t = Date.now() + min * 60000, d = new Date(t), n = new Date();
+    const days = Math.round((new Date(d.getFullYear(), d.getMonth(), d.getDate()) - new Date(n.getFullYear(), n.getMonth(), n.getDate())) / 86400000);
+    return (days === 1 ? '내일 ' : days > 1 ? `+${days}일 ` : '') + fmtHM(t);
+  }
   const fmtDate = (t) => { const d = new Date(t); return `${d.getFullYear()}.${pad(d.getMonth() + 1)}.${pad(d.getDate())}`; };
   const dayKey = (d) => `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`;
   const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -196,10 +202,15 @@
   if (flight && (!AP[flight.from] || !AP[flight.to] || !(flight.endAt > flight.startAt) || !ACMAP[flight.aircraft])) {
     flight = null; store.del('flight');
   }
-  const prefs = Object.assign({ minutes: 60, subject: '공부', custom: '', aircraft: 'A220', voice: true, mapStyle: 'satellite', notify: true, flightMini: false }, store.get('prefs', {}));
+  const prefs = Object.assign({ minutes: 60, subject: '공부', custom: '', aircraft: 'A220', voice: true, mapStyle: 'satellite', notify: true, flightMini: false, theme: 'auto' }, store.get('prefs', {}));
   if (!prefs.voiceV2) { prefs.voice = true; prefs.voiceV2 = true; } // 새 방송 음성은 기본으로 켬
   if (!SUBJECTS.some((s) => s.n === prefs.subject)) prefs.subject = '공부';
   const savePrefs = () => store.set('prefs', prefs);
+  // 화면 테마: 자동(기기 설정을 따름) · 라이트 · 다크
+  const THEMES = ['auto', 'light', 'dark'];
+  if (!THEMES.includes(prefs.theme)) prefs.theme = 'auto';
+  const darkMQ = window.matchMedia ? window.matchMedia('(prefers-color-scheme: dark)') : null;
+  const themeDark = () => prefs.theme === 'dark' || (prefs.theme === 'auto' && !!(darkMQ && darkMQ.matches));
 
   let depCode = loc;
   let homeSel = loc; // 처음 화면에서 고른(노란) 공항
@@ -222,7 +233,11 @@
   const COL = {
     space: '#0A1120', ocean: '#86CEF6', land: '#D3E9C3', landEdge: '#B4D39F',
     grat: 'rgba(255,255,255,0.3)', ink: '#141414', yellow: '#FFD43B', white: '#FFFFFF',
+    border: '90,120,80', chip: 'rgba(255,255,255,0.94)', chipIcon: '#55555C', chipText: '#3A3A40',
   };
+  // 다크 모드일 때 지도 위에 그리는 색 (내장 단색 지도·공항 칩)
+  const COL_LIGHT = { ocean: COL.ocean, land: COL.land, landEdge: COL.landEdge, border: COL.border, chip: COL.chip, chipIcon: COL.chipIcon, chipText: COL.chipText };
+  const COL_DARK = { ocean: '#16283A', land: '#27321F', landEdge: '#3E4F33', border: '150,175,140', chip: 'rgba(28,28,33,0.94)', chipIcon: '#B4B4BC', chipText: '#EDEDF0' };
   const PLANE = [[11, 0], [8, 1.3], [2, 1.5], [-3.5, 9], [-6, 9], [-2.5, 1.5], [-8, 1.3], [-10.5, 4.5], [-12.5, 4.5], [-11.2, 0],
     [-12.5, -4.5], [-10.5, -4.5], [-8, -1.3], [-2.5, -1.5], [-6, -9], [-3.5, -9], [2, -1.5], [8, -1.3]];
   const proj = HAS_GEO ? d3.geoOrthographic().clipAngle(90).precision(0.5) : null;
@@ -336,6 +351,7 @@
     builtinSat: 'NASA Blue Marble · Natural Earth',
     builtinFlat: 'Natural Earth',
   };
+  let styleDark = null; // 지금 MapLibre 지도가 어느 테마 색으로 만들어졌는지
   let ml = null, mlReady = false, mlCap = Math.PI / 2, baseStyle = null, tilesFailed = false;
   let camMoving = false; // 앱이 카메라를 계속 옮기는 중인지 (비행기 따라가기·전환 애니메이션·손으로 끌기)
   const tilesOn = () => !!(ml && mlReady);
@@ -360,6 +376,52 @@
       return Object.assign({}, l, { layout: Object.assign({}, l.layout, { 'text-field': ['coalesce', ['get', 'name:ko'], ['get', 'name:latin'], ['get', 'name']] }) });
     });
   }
+  // 다크 모드: 일반·지형 지도의 색을 밝기만 뒤집어 어둡게 (색조는 그대로, 채도는 조금 낮춤)
+  function parseColor(str) {
+    let m = /^#([0-9a-f]{3,8})$/i.exec(str);
+    if (m) {
+      let h = m[1];
+      if (h.length <= 4) h = h.split('').map((c) => c + c).join('');
+      if (h.length !== 6 && h.length !== 8) return null;
+      return { r: parseInt(h.slice(0, 2), 16), g: parseInt(h.slice(2, 4), 16), b: parseInt(h.slice(4, 6), 16), a: h.length === 8 ? parseInt(h.slice(6, 8), 16) / 255 : 1 };
+    }
+    m = /^rgba?\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)\s*(?:,\s*([\d.]+)\s*)?\)$/i.exec(str);
+    if (m) return { r: +m[1], g: +m[2], b: +m[3], a: m[4] == null ? 1 : +m[4] };
+    m = /^hsla?\(\s*([\d.]+)(?:deg)?\s*,\s*([\d.]+)%\s*,\s*([\d.]+)%\s*(?:,\s*([\d.]+)\s*)?\)$/i.exec(str);
+    if (m) return { h: +m[1], s: +m[2] / 100, l: +m[3] / 100, a: m[4] == null ? 1 : +m[4] };
+    if (/^white$/i.test(str)) return { r: 255, g: 255, b: 255, a: 1 };
+    if (/^black$/i.test(str)) return { r: 0, g: 0, b: 0, a: 1 };
+    return null;
+  }
+  function darkColor(str) {
+    const c = parseColor(str.trim());
+    if (!c) return str;
+    let { h, s: sa, l } = c;
+    if (h == null) {
+      const r = c.r / 255, g = c.g / 255, b = c.b / 255, mx = Math.max(r, g, b), mn = Math.min(r, g, b);
+      l = (mx + mn) / 2; const d = mx - mn;
+      sa = d === 0 ? 0 : d / (1 - Math.abs(2 * l - 1));
+      h = d === 0 ? 0 : mx === r ? 60 * (((g - b) / d) % 6) : mx === g ? 60 * ((b - r) / d + 2) : 60 * ((r - g) / d + 4);
+      if (h < 0) h += 360;
+    }
+    const L = 0.07 + (1 - l) * 0.8; // 흰색 → 아주 어두운 회색, 검은 글자 → 밝은 회색
+    return `hsla(${h.toFixed(1)}, ${Math.round(sa * 70)}%, ${Math.round(L * 100)}%, ${+c.a.toFixed(3)})`;
+  }
+  function darkPaint(v) {
+    if (typeof v === 'string') return darkColor(v);
+    if (Array.isArray(v)) return v.map(darkPaint);
+    if (v && typeof v === 'object' && Array.isArray(v.stops)) return Object.assign({}, v, { stops: v.stops.map(([z, c]) => [z, darkPaint(c)]) });
+    return v;
+  }
+  function darkLayers(layers) {
+    return layers.map((l) => {
+      if (l.type === 'raster') return Object.assign({}, l, { paint: Object.assign({}, l.paint, { 'raster-brightness-max': 0.32, 'raster-saturation': -0.3 }) }); // 음영 기복 사진은 어둡게만
+      if (!l.paint || l.type === 'hillshade') return l;
+      const paint = {};
+      for (const k of Object.keys(l.paint)) paint[k] = /-color$/.test(k) ? darkPaint(l.paint[k]) : l.paint[k];
+      return Object.assign({}, l, { paint });
+    });
+  }
   function buildStyle(mode) {
     const s = JSON.parse(JSON.stringify(baseStyle));
     s.projection = { type: 'globe' };
@@ -381,9 +443,13 @@
       const i = layers.findIndex((l) => /water/.test(l.id));
       layers.splice(i < 0 ? 1 : i, 0, {
         id: 'hills', type: 'hillshade', source: 'dem',
-        paint: { 'hillshade-exaggeration': 0.7, 'hillshade-shadow-color': '#3E3526', 'hillshade-highlight-color': '#FFFDF5', 'hillshade-accent-color': '#6B6150' },
+        paint: themeDark()
+          ? { 'hillshade-exaggeration': 0.7, 'hillshade-shadow-color': '#000000', 'hillshade-highlight-color': '#5C5A52', 'hillshade-accent-color': '#15130F' }
+          : { 'hillshade-exaggeration': 0.7, 'hillshade-shadow-color': '#3E3526', 'hillshade-highlight-color': '#FFFDF5', 'hillshade-accent-color': '#6B6150' },
       });
     }
+    styleDark = themeDark();
+    if (mode !== 'satellite' && styleDark) layers = darkLayers(layers);
     s.layers = layers;
     return s;
   }
@@ -512,9 +578,22 @@
     const pxPerKm = (tilesOn() ? worldR() : view.r * view.zoom) / 6371;
     return kmh / 3600 * pxPerKm;
   }
+  // 카메라가 지난번 지도 그리기 때보다 화면에서 몇 px 움직였는지 (아주 조금이면 무거운 지도는 다시 안 그림)
+  let lastCam = null, lastDrawAt = 0, prevCamMoving = false;
+  function camShiftPx() {
+    if (!lastCam || !HAS_GEO) return Infinity;
+    const R = tilesOn() ? worldR() : view.r * view.zoom;
+    return d3.geoDistance([view.lon, view.lat], [lastCam.lon, lastCam.lat]) * R + Math.abs(view.zoom / lastCam.zoom - 1) * R
+      + Math.abs(view.cx - lastCam.cx) + Math.abs(view.cy - lastCam.cy) + Math.abs(view.r - lastCam.r) * view.zoom;
+  }
   function frame(now) {
     raf = 0;
     const flying = step === 'flight' && !!flight;
+    // 비행 중에는 앞쪽 점선이 비행기 쪽으로 흘러오게 계속 그림 (초당 약 30번, 일시정지하면 멈춤)
+    const flowing = flying && !flight.pausedAt && !REDUCED;
+    const busy = !!tween || !!(gdrag && gdrag.moved) || !!pinch || !!(scene.pop && now - scene.pop.t0 < 420) || (flying && planePxPerSec() > 0.8);
+    if (!busy && flowing && now - lastDrawAt < 30) { kick(); return; }
+    lastDrawAt = now;
     if (flying) {
       flightGeometry();
       if (following) { // 비행기 따라가기: 목표 자리를 매 프레임 새로 계산
@@ -529,14 +608,20 @@
     }
     // 움직이는 동안은 부드럽게, 멈추면 마지막 프레임에서 사진을 다시 또렷하게(격자에 맞춰) 그림
     camMoving = !!tween || !!(gdrag && gdrag.moved) || !!pinch || (flying && following && !flight.pausedAt);
-    if (tilesOn()) syncMap();
-    else if (globeGL) {
-      const on = builtinSat();
-      if ($('earth').hidden === on) $('earth').hidden = !on;
-      if (on) globeGL.render();
+    // 비행 중 카메라가 0.25px도 안 움직였으면 지도는 그대로 두고 위 그림(항로·비행기)만 다시 그림
+    const needMap = !flying || camMoving !== prevCamMoving || camShiftPx() >= 0.25;
+    prevCamMoving = camMoving;
+    if (needMap) {
+      lastCam = { lon: view.lon, lat: view.lat, zoom: view.zoom, cx: view.cx, cy: view.cy, r: view.r };
+      if (tilesOn()) syncMap();
+      else if (globeGL) {
+        const on = builtinSat();
+        if ($('earth').hidden === on) $('earth').hidden = !on;
+        if (on) globeGL.render();
+      }
     }
     draw(now);
-    if (tween || (scene.pop && now - scene.pop.t0 < 420) || (flying && planePxPerSec() > 0.8)) kick();
+    if (busy || tween || flowing) kick();
   }
 
   function roundRect(x, y, w, h, r) {
@@ -746,7 +831,7 @@
         ctx.strokeStyle = sat ? `rgba(255,255,255,${0.45 * k})` : COL.landEdge; ctx.stroke();
         ctx.beginPath(); gpath(W50.borders);
         ctx.setLineDash([4, 3]);
-        ctx.strokeStyle = sat ? `rgba(255,230,160,${0.55 * k})` : `rgba(90,120,80,${0.6 * k})`; ctx.stroke();
+        ctx.strokeStyle = sat ? `rgba(255,230,160,${0.55 * k})` : `rgba(${COL.border},${0.6 * k})`; ctx.stroke();
         ctx.setLineDash([]);
       }
       if (limb) { // 오른쪽 아래로 갈수록 한 단계씩 어두워지는 초승달 그림자
@@ -767,22 +852,26 @@
       ctx.lineWidth = 1.5; ctx.strokeStyle = 'rgba(255,255,255,0.55)'; ctx.stroke();
     }
 
-    // 항로: 어두운 지도(위성) 위에서는 흰 선, 밝은 지도에서는 흰 테두리를 두른 검은 선
-    const dark = sat || (tiles && mapMode() === 'satellite');
+    // 항로: 어두운 지도(위성·다크 모드) 위에서는 흰 선, 밝은 지도에서는 흰 테두리를 두른 검은 선
+    const dark = sat || (tiles && mapMode() === 'satellite') || themeDark();
     ctx.lineCap = 'round';
-    const stroke = (geom, width, dash) => {
+    const stroke = (geom, width, dash, offset) => {
       if (!geom) return;
       geoLine(geom);
       ctx.setLineDash(dash || []);
+      ctx.lineDashOffset = offset || 0;
       if (!dark) { ctx.lineWidth = width + 3; ctx.strokeStyle = 'rgba(255,255,255,0.85)'; ctx.stroke(); }
       ctx.save();
       if (dark) { ctx.shadowColor = 'rgba(0,0,0,0.6)'; ctx.shadowBlur = 4; }
       ctx.lineWidth = width; ctx.strokeStyle = dark ? COL.white : COL.ink; ctx.stroke();
       ctx.restore();
       ctx.setLineDash([]);
+      ctx.lineDashOffset = 0;
     };
     stroke(scene.line, 3);
-    stroke(scene.todo, 2.5, [8, 8]);
+    // 앞으로 갈 길(점선)은 비행기 쪽으로 초당 30px씩 흘러와서, 비행기가 나아가는 느낌을 줌
+    const flow = step === 'flight' && flight && !flight.pausedAt && !REDUCED ? (now * 0.03) % 16 : 0;
+    stroke(scene.todo, 2.5, [8, 8], flow);
     stroke(scene.done, 3.5);
 
     drawChips(now);
@@ -835,7 +924,7 @@
       ctx.save();
       ctx.shadowColor = 'rgba(0,0,0,0.3)'; ctx.shadowBlur = 8; ctx.shadowOffsetY = 2;
       roundRect(rect.x, rect.y, rect.w, rect.h, 9);
-      ctx.fillStyle = hot ? COL.yellow : 'rgba(255,255,255,0.94)'; ctx.fill();
+      ctx.fillStyle = hot ? COL.yellow : COL.chip; ctx.fill();
       ctx.restore();
       if (c.kind === 'sel') {
         roundRect(rect.x, rect.y, rect.w, rect.h, 9);
@@ -843,8 +932,8 @@
       }
       const landing = c.kind === 'sel' && step !== 'home' || c.kind === 'cand';
       planePath(rect.x + 15, rect.y + rect.h / 2, landing ? 0.45 : -0.45, 0.6);
-      ctx.fillStyle = hot ? COL.ink : '#55555C'; ctx.fill();
-      ctx.fillStyle = hot ? COL.ink : '#3A3A40';
+      ctx.fillStyle = hot ? COL.ink : COL.chipIcon; ctx.fill();
+      ctx.fillStyle = hot ? COL.ink : COL.chipText;
       ctx.textBaseline = 'middle';
       ctx.fillText(c.code, rect.x + 27, rect.y + rect.h / 2 + 1);
       ctx.restore();
@@ -874,7 +963,14 @@
     return { cx: a.x + a.w / 2, cy: a.y + a.h / 2, r };
   }
   // 항로에 맞춰 조금 확대하되, 공의 가장자리가 보이도록 1.4배까지만 (더 보려면 직접 확대)
-  const routeZoom = (ext) => clamp(0.7 / Math.sin(clamp(ext, 0.004, Math.PI / 2)), 1, 1.4);
+  // 반지름 r로 그린 지구에서 배율 1일 때 화면 한가운데 1km가 몇 px인지 (인터넷 지도는 원근 보정한 실제 반지름 기준)
+  const pxPerKmAt1 = (r) => { const f = camF(); return (tilesOn() ? (r * r + r * Math.sqrt(r * r + f * f)) / f : r) / 6371; };
+  // 화면 가운데에서 가장자리까지 halfKm가 들어가게 하는 배율
+  const zoomForHalfKm = (r, halfPx, halfKm) => (halfPx / halfKm) / pxPerKmAt1(r);
+  // 도착지 단계: 항로 길이와 상관없이 도착지를 가운데 두고 반경 약 400km(주변 공항이 보일 만큼)만 보이게
+  const DEST_HALF_KM = 400;
+  const FOLLOW_HALF_KM = 1500; // 비행기 따라가기 버튼을 눌렀을 때 보이는 반경
+  const destZoom = (r) => clamp(zoomForHalfKm(r, r * 0.95, DEST_HALF_KM), 1, 60);
   let zoomMul = 1; // 사용자가 손가락·휠·버튼으로 바꾼 배율
 
   // 확대·축소 한계: 비행 중에는 지구 전체가 보일 때까지 축소할 수 있음
@@ -891,10 +987,9 @@
     if (s === 'route') {
       const x = selected();
       if (x) {
-        const A = lonlat(dep), B = lonlat(x.a);
-        center = d3.geoInterpolate(A, B)(0.5);
-        zoom = routeZoom(d3.geoDistance(A, B) / 2);
+        center = lonlat(x.a);
       }
+      zoom = destZoom(slot.r); // 고른 도착지가 없으면 출발지 주변
     } else if (s === 'flight' && flight) {
       const A = lonlat(AP[flight.from]), B = lonlat(AP[flight.to]);
       const p = progressOf(flight, Date.now());
@@ -1060,13 +1155,27 @@
   }
   $('btn-follow').addEventListener('click', () => {
     if (step !== 'flight' || !flight) return;
-    if (!following) { // 지금 확대 배율은 그대로 두고 비행기 쪽으로 돌아감
-      zoomMul = 1;
-      const base = viewFor('flight', dockRect()).zoom;
-      zoomMul = mulRange(view.zoom / base);
-    }
+    // 비행기 쪽으로 돌아가면서 주변(반경 약 1,500km)이 보이는 배율로 맞춤 (더 확대돼 있었으면 그만큼 축소)
+    zoomMul = 1;
+    const v0 = viewFor('flight', dockRect());
+    const close = zoomForHalfKm(v0.r, (v0.area || Math.min(W, H)) * 0.45, FOLLOW_HALF_KM);
+    zoomMul = mulRange(close / v0.zoom);
     setFollowing(true);
     flyTo(viewFor('flight', dockRect()), 800);
+  });
+  // 지구 전체를 한 번에 보기
+  $('btn-globe').addEventListener('click', () => {
+    if (!canZoom()) return;
+    if (step === 'flight') {
+      zoomMul = mulRange(flightMinZoom() / flightBase);
+      if (following) flyTo(viewFor('flight', dockRect()), 700);
+      else flyTo(Object.assign({}, tween ? tween.to : view, { zoom: flightMinZoom() }), 700);
+      return;
+    }
+    zoomMul = 1;
+    const base = viewFor(step, dockRect()).zoom;
+    zoomMul = 1 / base; // 이 단계에서는 배율 1(지구 전체)로 계속 보여 줌
+    flyTo(viewFor(step, dockRect()), 700);
   });
   const chipAt = (x, y) => chipHits.find((c) => x >= c.x && x <= c.x + c.w && y >= c.y && y <= c.y + c.h);
   function onChipTap(code) {
@@ -1276,6 +1385,29 @@
       : '<p class="sr-empty">찾는 공항이 없어요. 도시 이름, 공항 코드(예: NRT), 나라 이름이나 초성(예: ㅇㅊ)으로 찾아 보세요.</p>';
   }
   function pickHomeFromSearch(code) { closeHomeSearch(); selectHome(code); }
+  const THEME_LABEL = { auto: '자동', light: '라이트', dark: '다크' };
+  function applyTheme(announce) {
+    const dark = themeDark();
+    document.documentElement.dataset.theme = dark ? 'dark' : 'light';
+    Object.assign(COL, dark ? COL_DARK : COL_LIGHT);
+    const b = $('btn-theme');
+    b.dataset.mode = prefs.theme;
+    b.setAttribute('aria-label', `화면 테마: ${THEME_LABEL[prefs.theme]}${prefs.theme === 'auto' ? '(기기 설정)' : ''}. 누르면 바뀌어요`);
+    // 일반·지형 지도는 색이 테마에 따라 달라서 다시 만듦 (위성은 그대로)
+    if (tilesOn() && styleDark !== dark && mapMode() !== 'satellite') ml.setStyle(buildStyle(mapMode()));
+    kick();
+    if (announce) toast(prefs.theme === 'auto' ? `테마: 자동 — 기기 설정대로 ${dark ? '다크' : '라이트'} 모드예요` : `테마: ${THEME_LABEL[prefs.theme]} 모드`);
+  }
+  $('btn-theme').addEventListener('click', () => {
+    prefs.theme = THEMES[(THEMES.indexOf(prefs.theme) + 1) % THEMES.length];
+    savePrefs();
+    applyTheme(true);
+  });
+  if (darkMQ) {
+    const onSys = () => { if (prefs.theme === 'auto') applyTheme(false); };
+    if (darkMQ.addEventListener) darkMQ.addEventListener('change', onSys); else if (darkMQ.addListener) darkMQ.addListener(onSys);
+  }
+  applyTheme(false);
   $('btn-search').addEventListener('click', () => ($('home-search').hidden ? openHomeSearch() : closeHomeSearch()));
   $('home-q').addEventListener('input', renderHomeResults);
   $('home-q').addEventListener('keydown', (e) => {
@@ -1427,6 +1559,7 @@
     setText('hm-m-val', pad(m % 60));
     document.querySelectorAll('[data-quick]').forEach((b) => b.setAttribute('aria-pressed', String(Number(b.dataset.quick) === m)));
     $('btn-to-route').disabled = m <= 0;
+    setHTML('time-end', m > 0 ? `지금 시작하면 <b>${endClock(m)}</b>에 끝나요` : '');
     if (m <= 0) { setHTML('time-best', '<span class="hint">0시간 0분으로는 떠날 수 없어요. 시간을 골라 주세요.</span>'); return; }
     const best = routes()[0];
     setHTML('time-best', best
@@ -1447,6 +1580,15 @@
   $('hm-m').addEventListener('click', () => toggleDrawer('wd-m', $('hm-m'), wheelM, () => prefs.minutes % 60));
   document.querySelectorAll('[data-quick]').forEach((b) => b.addEventListener('click', () => setMinutes(Number(b.dataset.quick))));
   $('btn-to-route').addEventListener('click', () => { if (prefs.minutes > 0) go('route'); });
+
+  // 끝나는 시각은 시간이 흐르면 바뀌므로 20초마다 새로 계산
+  setInterval(() => {
+    if (step === 'time') renderTimeText();
+    if (step === 'route') {
+      document.querySelectorAll('#cards .arr').forEach((el) => { el.textContent = endClock(+el.dataset.min); });
+      renderRouteSummary();
+    }
+  }, 20000);
 
   // ---------- 2. 출발지 / 도착지 ----------
   // 출발지에서 모든 공항까지 거리는 출발지가 바뀔 때만 계산하고, 정렬 결과는 출발지·시간이 같으면 다시 씀
@@ -1586,7 +1728,7 @@
     const diff = exact ? '딱 맞아요' : `${x.diff > 0 ? '+' : '−'}${fmtDur(Math.abs(x.diff))}`;
     return `<button type="button" class="dest" role="option" data-code="${x.a.code}" aria-selected="${sel.to === x.a.code}">
       <span class="ychip">${x.a.code}</span>
-      <span class="dest-city"><b>${esc(x.a.city)}</b><small>${esc(x.a.country)} · ${fmtKm(x.km)}</small></span>
+      <span class="dest-city"><b>${esc(x.a.city)}</b><small>${esc(x.a.country)} · ${fmtKm(x.km)} · <span class="arr" data-min="${x.min}">${endClock(x.min)}</span> 도착</small></span>
       <span class="dest-time"><b>${fmtHm(x.min)}</b><small${exact ? ' class="exact"' : ''}>${diff}</small></span>
     </button>`;
   }
@@ -1644,6 +1786,8 @@
       const modeChanged = searching !== lastCardsSearch;
       lastCards = html; lastCardsSearch = searching;
       $('cards').innerHTML = html;
+      padDestList();
+      if (!searching) scrollDestToTop(sel.to, false); else $('cards').scrollTop = 0;
       if (!REDUCED && (!searching || modeChanged)) $('cards').animate([{ opacity: 0.2, transform: 'translateY(8px)' }, { opacity: 1, transform: 'none' }], { duration: 280, easing: 'cubic-bezier(.2,.8,.2,1)' });
     }
     renderRouteSummary();
@@ -1673,17 +1817,45 @@
       note = Math.abs(pct) < 3 ? '실제와 거의 같은 속도로 날아요.'
         : `정한 시간 ${fmtHHMM(prefs.minutes)}에 맞춰 실제보다 ${fmtNum(Math.abs(pct))}% ${pct > 0 ? '빠르게' : '느리게'} 날아요.`;
     }
+    note += ` 지금 출발하면 ${endClock(sel.mode === 'real' ? x.min : prefs.minutes)}에 도착해요.`;
     setText('route-note', note);
   }
-  function selectDest(code) {
+  // 도착지 고르기: 손으로 스크롤하면 맨 위에 보이는 줄이 저절로 선택되고, 줄을 누르면 그 줄이 맨 위로 올라감
+  let autoLock = 0, userScrollAt = 0, pickRaf = 0;
+  function selectDest(code, via) {
+    if (via === 'scroll' && sel.to === code) return;
     sel.to = code; sel.mode = 'real';
     $('cards').querySelectorAll('.dest').forEach((c) => c.setAttribute('aria-selected', String(c.dataset.code === code)));
-    const card = $('cards').querySelector(`[data-code="${code}"]`);
-    if (card) card.scrollIntoView({ block: 'nearest', behavior: REDUCED ? 'auto' : 'smooth' });
+    if (via !== 'scroll') scrollDestToTop(code, true);
     renderRouteSummary();
     updateScene();
-    flyTo(viewFor('route', dockRect()), 700);
+    flyTo(viewFor('route', dockRect()), via === 'scroll' ? 450 : 700);
   }
+  function scrollDestToTop(code, smooth) {
+    const list = $('cards'), card = list.querySelector(`.dest[data-code="${code}"]`);
+    if (!card) return;
+    userScrollAt = 0; autoLock = performance.now() + (smooth ? 900 : 100); // 저절로 움직이는 동안은 자동 선택을 멈춤
+    list.scrollTo({ top: Math.max(0, card.offsetTop - 2), behavior: smooth && !REDUCED ? 'smooth' : 'auto' });
+  }
+  function pickTopDest() { // 맨 위에 절반 이상 보이는 줄
+    const list = $('cards'), top = list.scrollTop;
+    for (const card of list.querySelectorAll('.dest')) {
+      if (card.offsetTop + card.offsetHeight * 0.5 >= top + 2) { selectDest(card.dataset.code, 'scroll'); return; }
+    }
+  }
+  ['wheel', 'touchstart', 'touchmove', 'pointerdown', 'keydown'].forEach((ev) => $('cards').addEventListener(ev, () => { userScrollAt = performance.now(); }, { passive: true }));
+  $('cards').addEventListener('scroll', () => {
+    const now = performance.now();
+    if (now < autoLock || now - userScrollAt > 1200) return; // 손으로 움직인 스크롤만 (관성으로 이어지는 것 포함)
+    userScrollAt = now;
+    if (!pickRaf) pickRaf = requestAnimationFrame(() => { pickRaf = 0; pickTopDest(); });
+  }, { passive: true });
+  // 목록 끝의 줄도 맨 위까지 올라올 수 있게 아래에 여백
+  function padDestList() {
+    const list = $('cards'), h = list.getBoundingClientRect().height;
+    if (h > 0) list.style.paddingBottom = Math.max(8, Math.round(h - 76)) + 'px';
+  }
+  if ('ResizeObserver' in window) new ResizeObserver(padDestList).observe($('cards'));
   // 위쪽 설정 접기·펼치기: 막대를 위로 밀면 요약 한 줄 + 넓은 도착지 목록
   const routePane = document.querySelector('.pane-route');
   function setCompact(on) {
@@ -1716,7 +1888,7 @@
   $('cards').addEventListener('click', (e) => {
     if (e.target.closest('#more-far')) { const top = $('cards').scrollTop; showFar = true; renderRoute(); $('cards').scrollTop = top; return; }
     const c = e.target.closest('.dest');
-    if (c) selectDest(c.dataset.code);
+    if (c) selectDest(c.dataset.code, 'tap');
   });
   $('mode-real').addEventListener('click', () => { sel.mode = 'real'; renderRouteSummary(); });
   $('mode-mine').addEventListener('click', () => { sel.mode = 'mine'; renderRouteSummary(); });
@@ -2399,7 +2571,7 @@
     $('m-remain').textContent = clock;
     $('f-remain-label').textContent = paused ? '일시정지 중' : 'Time remaining';
     $('f-dist').textContent = fmtNum(f.km - flown) + ' km';
-    $('m-dist').textContent = `${fmtNum(f.km - flown)} km 남음`;
+    $('m-dist').textContent = `${fmtNum(f.km - flown)} km 남음 · ${paused ? '일시정지' : fmtHM(f.endAt) + ' 도착'}`;
     $('m-phase').textContent = paused ? '일시정지' : `${PHASES[idx].en} · ${PHASES[idx].ko}`;
     $('f-bar').style.width = (p * 100).toFixed(2) + '%';
     $('m-bar').style.width = (p * 100).toFixed(2) + '%';
