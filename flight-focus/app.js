@@ -362,7 +362,9 @@
   }
   function buildStyle(mode) {
     const s = JSON.parse(JSON.stringify(baseStyle));
-    s.projection = { type: 'globe' };
+    // v5.24의 구면 셰이더는 일부 모바일 GPU에서 확대 시 좌표 정밀도가 부족함.
+    // 지구 전체는 구면으로, 가까운 지도는 정밀한 Mercator로 그림 (세 지도 공통).
+    s.projection = { type: ['interpolate', ['linear'], ['zoom'], 5, 'vertical-perspective', 8, 'mercator'] };
     s.sky = { 'atmosphere-blend': 0 }; // 가장자리 그라데이션 빛은 끔
     let layers = koLabels(s.layers || []);
     if (mode === 'satellite') {
@@ -418,6 +420,9 @@
         setAttrib();
         kick();
       });
+      // 지도 엔진의 실제 그리기가 끝난 뒤 같은 카메라로 비행기·항로를 그림.
+      // 타일 로딩이나 투영 전환으로 지도만 다시 그려지는 프레임도 함께 맞춤.
+      ml.on('render', () => { if (mlReady) draw(performance.now()); });
       ml.on('error', () => {}); // 타일 하나가 안 와도 전체는 계속
     } catch (e) {
       tilesFailed = true;
@@ -434,7 +439,7 @@
       center: [(((view.lon + 180) % 360) + 360) % 360 - 180, lat], zoom: clamp(z, -2, 19),
       padding: { left: Math.max(0, 2 * cx - W), right: Math.max(0, W - 2 * cx), top: Math.max(0, 2 * cy - H), bottom: Math.max(0, H - 2 * cy) },
     });
-    if (ml.redraw) ml.redraw(); // 지도와 위에 그린 항로·칩이 같은 순간을 보이도록
+    // MapLibre가 예약한 프레임을 사용함. 매번 redraw()로 취소/재실행하지 않음.
   }
   function setAttrib() {
     const m = mapMode();
@@ -514,11 +519,14 @@
   }
   function frame(now) {
     raf = 0;
+    // 한 프레임에서 비행기와 추적 카메라가 정확히 같은 시각을 사용해야 함.
+    // 레이아웃 계산 사이에 Date.now()를 다시 읽으면 확대 시 위치 차이가 커짐.
+    const flightNow = performance.timeOrigin + now;
     const flying = step === 'flight' && !!flight;
     if (flying) {
-      flightGeometry();
+      flightGeometry(flightNow);
       if (following) { // 비행기 따라가기: 목표 자리를 매 프레임 새로 계산
-        const v = viewFor('flight', dockRect());
+        const v = viewFor('flight', dockRect(), flightNow);
         if (tween) tween.to = v; else Object.assign(view, v);
       }
     }
@@ -528,15 +536,15 @@
       if (t >= 1) tween = null;
     }
     // 움직이는 동안은 부드럽게, 멈추면 마지막 프레임에서 사진을 다시 또렷하게(격자에 맞춰) 그림
-    camMoving = !!tween || !!(gdrag && gdrag.moved) || !!pinch || (flying && following && !flight.pausedAt);
+    camMoving = !!tween || !!(gdrag && gdrag.moved) || !!pinch || now < zoomUntil || (flying && following && !flight.pausedAt);
     if (tilesOn()) syncMap();
     else if (globeGL) {
       const on = builtinSat();
       if ($('earth').hidden === on) $('earth').hidden = !on;
       if (on) globeGL.render();
     }
-    draw(now);
-    if (tween || (scene.pop && now - scene.pop.t0 < 420) || (flying && planePxPerSec() > 0.8)) kick();
+    if (!tilesOn()) draw(now);
+    if (tween || now < zoomUntil || (scene.pop && now - scene.pop.t0 < 420) || (flying && planePxPerSec() > 0.8)) kick();
   }
 
   function roundRect(x, y, w, h, r) {
@@ -870,7 +878,7 @@
   const minZoom = () => (step === 'flight' ? flightMinZoom() : 0.4);
   let flightBase = 1; // 비행 중 기본 배율 (사용자 배율 zoomMul을 곱하기 전)
   const mulRange = (m) => clamp(m, step === 'flight' ? flightMinZoom() / flightBase : 0.4, maxZoom() / 2);
-  function viewFor(s, d) {
+  function viewFor(s, d, now = Date.now()) {
     const slot = slotFor(s, d);
     const dep = AP[depCode];
     let center = lonlat(dep);
@@ -885,7 +893,7 @@
       }
     } else if (s === 'flight' && flight) {
       const A = lonlat(AP[flight.from]), B = lonlat(AP[flight.to]);
-      const p = progressOf(flight, Date.now());
+      const p = progressOf(flight, now);
       center = d3.geoInterpolate(A, B)(profileOf(flight).frac(p));
       const dist = Math.min(d3.geoDistance(A, B), Math.PI / 2);
       zoom = clamp((slot.area * 0.42) / (slot.r * Math.sin(Math.max(dist, 0.004))), 0.15, 30);
@@ -922,25 +930,28 @@
     kick();
   }
 
-  function flightGeometry() {
+  function flightGeometry(now = Date.now()) {
     if (!HAS_GEO || !flight) return;
     const A = lonlat(AP[flight.from]), B = lonlat(AP[flight.to]);
     const interp = d3.geoInterpolate(A, B);
-    const s = profileOf(flight).frac(progressOf(flight, Date.now()));
+    const p = progressOf(flight, now);
+    const s = profileOf(flight).frac(p);
     const pos = interp(s);
     scene.done = { type: 'LineString', coordinates: [A, pos] };
     scene.todo = { type: 'LineString', coordinates: [pos, B] };
     scene.plane = pos; scene.ahead = interp(s + 0.002);
-    scene.altFrac = profileOf(flight).alt(progressOf(flight, Date.now())) / 41000;
+    scene.altFrac = profileOf(flight).alt(p) / 41000;
   }
 
   // 지구본: 한 손가락(마우스)으로 돌리기, 두 손가락·휠·버튼으로 확대·축소, 공항 칩 누르기
   let gdrag = null, pinch = null;
+  let zoomUntil = 0;
   const pts = new Map();
   const canTouchGlobe = () => ['home', 'time', 'route', 'flight', 'arrive'].includes(step);
   const canZoom = () => HAS_GEO && step !== 'pass' && step !== 'log';
   function zoomBy(f) {
     if (!canZoom()) return;
+    zoomUntil = performance.now() + 160; // 휠·핀치 입력 사이에도 픽셀 스냅을 반복하지 않음
     zoomMul = mulRange(zoomMul * f);
     if (step === 'flight' && following) { follow(viewFor('flight', dockRect())); return; }
     if (tween) { tween.to.zoom = clamp(tween.to.zoom * f, minZoom(), maxZoom()); return; }
