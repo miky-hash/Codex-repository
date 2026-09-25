@@ -95,6 +95,12 @@
     return h ? `${h}:${pad(m)}:${pad(s)}` : `${pad(m)}:${pad(s)}`;
   }
   const fmtHM = (t) => { const d = new Date(t); return `${pad(d.getHours())}:${pad(d.getMinutes())}`; };
+  // 지금부터 min분 뒤의 실제 시각 (다음 날이면 '내일', 그 뒤면 '+2일')
+  function endClock(min) {
+    const t = Date.now() + min * 60000, d = new Date(t), n = new Date();
+    const days = Math.round((new Date(d.getFullYear(), d.getMonth(), d.getDate()) - new Date(n.getFullYear(), n.getMonth(), n.getDate())) / 86400000);
+    return (days === 1 ? '내일 ' : days > 1 ? `+${days}일 ` : '') + fmtHM(t);
+  }
   const fmtDate = (t) => { const d = new Date(t); return `${d.getFullYear()}.${pad(d.getMonth() + 1)}.${pad(d.getDate())}`; };
   const dayKey = (d) => `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`;
   const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -512,9 +518,22 @@
     const pxPerKm = (tilesOn() ? worldR() : view.r * view.zoom) / 6371;
     return kmh / 3600 * pxPerKm;
   }
+  // 카메라가 지난번 지도 그리기 때보다 화면에서 몇 px 움직였는지 (아주 조금이면 무거운 지도는 다시 안 그림)
+  let lastCam = null, lastDrawAt = 0, prevCamMoving = false;
+  function camShiftPx() {
+    if (!lastCam || !HAS_GEO) return Infinity;
+    const R = tilesOn() ? worldR() : view.r * view.zoom;
+    return d3.geoDistance([view.lon, view.lat], [lastCam.lon, lastCam.lat]) * R + Math.abs(view.zoom / lastCam.zoom - 1) * R
+      + Math.abs(view.cx - lastCam.cx) + Math.abs(view.cy - lastCam.cy) + Math.abs(view.r - lastCam.r) * view.zoom;
+  }
   function frame(now) {
     raf = 0;
     const flying = step === 'flight' && !!flight;
+    // 비행 중에는 앞쪽 점선이 비행기 쪽으로 흘러오게 계속 그림 (초당 약 30번, 일시정지하면 멈춤)
+    const flowing = flying && !flight.pausedAt && !REDUCED;
+    const busy = !!tween || !!(gdrag && gdrag.moved) || !!pinch || !!(scene.pop && now - scene.pop.t0 < 420) || (flying && planePxPerSec() > 0.8);
+    if (!busy && flowing && now - lastDrawAt < 30) { kick(); return; }
+    lastDrawAt = now;
     if (flying) {
       flightGeometry();
       if (following) { // 비행기 따라가기: 목표 자리를 매 프레임 새로 계산
@@ -529,14 +548,20 @@
     }
     // 움직이는 동안은 부드럽게, 멈추면 마지막 프레임에서 사진을 다시 또렷하게(격자에 맞춰) 그림
     camMoving = !!tween || !!(gdrag && gdrag.moved) || !!pinch || (flying && following && !flight.pausedAt);
-    if (tilesOn()) syncMap();
-    else if (globeGL) {
-      const on = builtinSat();
-      if ($('earth').hidden === on) $('earth').hidden = !on;
-      if (on) globeGL.render();
+    // 비행 중 카메라가 0.25px도 안 움직였으면 지도는 그대로 두고 위 그림(항로·비행기)만 다시 그림
+    const needMap = !flying || camMoving !== prevCamMoving || camShiftPx() >= 0.25;
+    prevCamMoving = camMoving;
+    if (needMap) {
+      lastCam = { lon: view.lon, lat: view.lat, zoom: view.zoom, cx: view.cx, cy: view.cy, r: view.r };
+      if (tilesOn()) syncMap();
+      else if (globeGL) {
+        const on = builtinSat();
+        if ($('earth').hidden === on) $('earth').hidden = !on;
+        if (on) globeGL.render();
+      }
     }
     draw(now);
-    if (tween || (scene.pop && now - scene.pop.t0 < 420) || (flying && planePxPerSec() > 0.8)) kick();
+    if (busy || tween || flowing) kick();
   }
 
   function roundRect(x, y, w, h, r) {
@@ -770,19 +795,23 @@
     // 항로: 어두운 지도(위성) 위에서는 흰 선, 밝은 지도에서는 흰 테두리를 두른 검은 선
     const dark = sat || (tiles && mapMode() === 'satellite');
     ctx.lineCap = 'round';
-    const stroke = (geom, width, dash) => {
+    const stroke = (geom, width, dash, offset) => {
       if (!geom) return;
       geoLine(geom);
       ctx.setLineDash(dash || []);
+      ctx.lineDashOffset = offset || 0;
       if (!dark) { ctx.lineWidth = width + 3; ctx.strokeStyle = 'rgba(255,255,255,0.85)'; ctx.stroke(); }
       ctx.save();
       if (dark) { ctx.shadowColor = 'rgba(0,0,0,0.6)'; ctx.shadowBlur = 4; }
       ctx.lineWidth = width; ctx.strokeStyle = dark ? COL.white : COL.ink; ctx.stroke();
       ctx.restore();
       ctx.setLineDash([]);
+      ctx.lineDashOffset = 0;
     };
     stroke(scene.line, 3);
-    stroke(scene.todo, 2.5, [8, 8]);
+    // 앞으로 갈 길(점선)은 비행기 쪽으로 초당 30px씩 흘러와서, 비행기가 나아가는 느낌을 줌
+    const flow = step === 'flight' && flight && !flight.pausedAt && !REDUCED ? (now * 0.03) % 16 : 0;
+    stroke(scene.todo, 2.5, [8, 8], flow);
     stroke(scene.done, 3.5);
 
     drawChips(now);
@@ -874,7 +903,12 @@
     return { cx: a.x + a.w / 2, cy: a.y + a.h / 2, r };
   }
   // 항로에 맞춰 조금 확대하되, 공의 가장자리가 보이도록 1.4배까지만 (더 보려면 직접 확대)
-  const routeZoom = (ext) => clamp(0.7 / Math.sin(clamp(ext, 0.004, Math.PI / 2)), 1, 1.4);
+  // 반지름 r로 그린 지구에서 배율 1일 때 화면 한가운데 1km가 몇 px인지 (인터넷 지도는 원근 보정한 실제 반지름 기준)
+  const pxPerKmAt1 = (r) => { const f = camF(); return (tilesOn() ? (r * r + r * Math.sqrt(r * r + f * f)) / f : r) / 6371; };
+  // 화면 가운데에서 가장자리까지 halfKm가 들어가게 하는 배율
+  const zoomForHalfKm = (r, halfPx, halfKm) => (halfPx / halfKm) / pxPerKmAt1(r);
+  // 도착지 단계: 항로와 주변 공항이 보일 만큼 확대해서 시작 (가까운 곳도 반경 600km는 보이게, 먼 곳은 지구 전체)
+  const routeZoom = (r, routeKm) => clamp(zoomForHalfKm(r, r * 0.95, Math.max(routeKm * 0.75, 600)), 1, 40);
   let zoomMul = 1; // 사용자가 손가락·휠·버튼으로 바꾼 배율
 
   // 확대·축소 한계: 비행 중에는 지구 전체가 보일 때까지 축소할 수 있음
@@ -893,7 +927,7 @@
       if (x) {
         const A = lonlat(dep), B = lonlat(x.a);
         center = d3.geoInterpolate(A, B)(0.5);
-        zoom = routeZoom(d3.geoDistance(A, B) / 2);
+        zoom = routeZoom(slot.r, x.km);
       }
     } else if (s === 'flight' && flight) {
       const A = lonlat(AP[flight.from]), B = lonlat(AP[flight.to]);
@@ -1060,13 +1094,28 @@
   }
   $('btn-follow').addEventListener('click', () => {
     if (step !== 'flight' || !flight) return;
-    if (!following) { // 지금 확대 배율은 그대로 두고 비행기 쪽으로 돌아감
-      zoomMul = 1;
-      const base = viewFor('flight', dockRect()).zoom;
-      zoomMul = mulRange(view.zoom / base);
-    }
+    // 비행기 쪽으로 돌아가면서 주변(반경 약 700km)이 보일 만큼 확대. 이미 더 확대돼 있으면 그대로
+    const current = tween ? tween.to.zoom : view.zoom; // 지금 보이는 배율
+    zoomMul = 1;
+    const v0 = viewFor('flight', dockRect());
+    const close = zoomForHalfKm(v0.r, (v0.area || Math.min(W, H)) * 0.45, 700);
+    zoomMul = mulRange(Math.max(current, close) / v0.zoom);
     setFollowing(true);
     flyTo(viewFor('flight', dockRect()), 800);
+  });
+  // 지구 전체를 한 번에 보기
+  $('btn-globe').addEventListener('click', () => {
+    if (!canZoom()) return;
+    if (step === 'flight') {
+      zoomMul = mulRange(flightMinZoom() / flightBase);
+      if (following) flyTo(viewFor('flight', dockRect()), 700);
+      else flyTo(Object.assign({}, tween ? tween.to : view, { zoom: flightMinZoom() }), 700);
+      return;
+    }
+    zoomMul = 1;
+    const base = viewFor(step, dockRect()).zoom;
+    zoomMul = 1 / base; // 이 단계에서는 배율 1(지구 전체)로 계속 보여 줌
+    flyTo(viewFor(step, dockRect()), 700);
   });
   const chipAt = (x, y) => chipHits.find((c) => x >= c.x && x <= c.x + c.w && y >= c.y && y <= c.y + c.h);
   function onChipTap(code) {
@@ -1427,6 +1476,7 @@
     setText('hm-m-val', pad(m % 60));
     document.querySelectorAll('[data-quick]').forEach((b) => b.setAttribute('aria-pressed', String(Number(b.dataset.quick) === m)));
     $('btn-to-route').disabled = m <= 0;
+    setHTML('time-end', m > 0 ? `지금 시작하면 <b>${endClock(m)}</b>에 끝나요` : '');
     if (m <= 0) { setHTML('time-best', '<span class="hint">0시간 0분으로는 떠날 수 없어요. 시간을 골라 주세요.</span>'); return; }
     const best = routes()[0];
     setHTML('time-best', best
@@ -1447,6 +1497,15 @@
   $('hm-m').addEventListener('click', () => toggleDrawer('wd-m', $('hm-m'), wheelM, () => prefs.minutes % 60));
   document.querySelectorAll('[data-quick]').forEach((b) => b.addEventListener('click', () => setMinutes(Number(b.dataset.quick))));
   $('btn-to-route').addEventListener('click', () => { if (prefs.minutes > 0) go('route'); });
+
+  // 끝나는 시각은 시간이 흐르면 바뀌므로 20초마다 새로 계산
+  setInterval(() => {
+    if (step === 'time') renderTimeText();
+    if (step === 'route') {
+      document.querySelectorAll('#cards .arr').forEach((el) => { el.textContent = endClock(+el.dataset.min); });
+      renderRouteSummary();
+    }
+  }, 20000);
 
   // ---------- 2. 출발지 / 도착지 ----------
   // 출발지에서 모든 공항까지 거리는 출발지가 바뀔 때만 계산하고, 정렬 결과는 출발지·시간이 같으면 다시 씀
@@ -1586,7 +1645,7 @@
     const diff = exact ? '딱 맞아요' : `${x.diff > 0 ? '+' : '−'}${fmtDur(Math.abs(x.diff))}`;
     return `<button type="button" class="dest" role="option" data-code="${x.a.code}" aria-selected="${sel.to === x.a.code}">
       <span class="ychip">${x.a.code}</span>
-      <span class="dest-city"><b>${esc(x.a.city)}</b><small>${esc(x.a.country)} · ${fmtKm(x.km)}</small></span>
+      <span class="dest-city"><b>${esc(x.a.city)}</b><small>${esc(x.a.country)} · ${fmtKm(x.km)} · <span class="arr" data-min="${x.min}">${endClock(x.min)}</span> 도착</small></span>
       <span class="dest-time"><b>${fmtHm(x.min)}</b><small${exact ? ' class="exact"' : ''}>${diff}</small></span>
     </button>`;
   }
@@ -1644,6 +1703,8 @@
       const modeChanged = searching !== lastCardsSearch;
       lastCards = html; lastCardsSearch = searching;
       $('cards').innerHTML = html;
+      padDestList();
+      if (!searching) scrollDestToTop(sel.to, false); else $('cards').scrollTop = 0;
       if (!REDUCED && (!searching || modeChanged)) $('cards').animate([{ opacity: 0.2, transform: 'translateY(8px)' }, { opacity: 1, transform: 'none' }], { duration: 280, easing: 'cubic-bezier(.2,.8,.2,1)' });
     }
     renderRouteSummary();
@@ -1673,17 +1734,45 @@
       note = Math.abs(pct) < 3 ? '실제와 거의 같은 속도로 날아요.'
         : `정한 시간 ${fmtHHMM(prefs.minutes)}에 맞춰 실제보다 ${fmtNum(Math.abs(pct))}% ${pct > 0 ? '빠르게' : '느리게'} 날아요.`;
     }
+    note += ` 지금 출발하면 ${endClock(sel.mode === 'real' ? x.min : prefs.minutes)}에 도착해요.`;
     setText('route-note', note);
   }
-  function selectDest(code) {
+  // 도착지 고르기: 손으로 스크롤하면 맨 위에 보이는 줄이 저절로 선택되고, 줄을 누르면 그 줄이 맨 위로 올라감
+  let autoLock = 0, userScrollAt = 0, pickRaf = 0;
+  function selectDest(code, via) {
+    if (via === 'scroll' && sel.to === code) return;
     sel.to = code; sel.mode = 'real';
     $('cards').querySelectorAll('.dest').forEach((c) => c.setAttribute('aria-selected', String(c.dataset.code === code)));
-    const card = $('cards').querySelector(`[data-code="${code}"]`);
-    if (card) card.scrollIntoView({ block: 'nearest', behavior: REDUCED ? 'auto' : 'smooth' });
+    if (via !== 'scroll') scrollDestToTop(code, true);
     renderRouteSummary();
     updateScene();
-    flyTo(viewFor('route', dockRect()), 700);
+    flyTo(viewFor('route', dockRect()), via === 'scroll' ? 450 : 700);
   }
+  function scrollDestToTop(code, smooth) {
+    const list = $('cards'), card = list.querySelector(`.dest[data-code="${code}"]`);
+    if (!card) return;
+    userScrollAt = 0; autoLock = performance.now() + (smooth ? 900 : 100); // 저절로 움직이는 동안은 자동 선택을 멈춤
+    list.scrollTo({ top: Math.max(0, card.offsetTop - 2), behavior: smooth && !REDUCED ? 'smooth' : 'auto' });
+  }
+  function pickTopDest() { // 맨 위에 절반 이상 보이는 줄
+    const list = $('cards'), top = list.scrollTop;
+    for (const card of list.querySelectorAll('.dest')) {
+      if (card.offsetTop + card.offsetHeight * 0.5 >= top + 2) { selectDest(card.dataset.code, 'scroll'); return; }
+    }
+  }
+  ['wheel', 'touchstart', 'touchmove', 'pointerdown', 'keydown'].forEach((ev) => $('cards').addEventListener(ev, () => { userScrollAt = performance.now(); }, { passive: true }));
+  $('cards').addEventListener('scroll', () => {
+    const now = performance.now();
+    if (now < autoLock || now - userScrollAt > 1200) return; // 손으로 움직인 스크롤만 (관성으로 이어지는 것 포함)
+    userScrollAt = now;
+    if (!pickRaf) pickRaf = requestAnimationFrame(() => { pickRaf = 0; pickTopDest(); });
+  }, { passive: true });
+  // 목록 끝의 줄도 맨 위까지 올라올 수 있게 아래에 여백
+  function padDestList() {
+    const list = $('cards'), h = list.getBoundingClientRect().height;
+    if (h > 0) list.style.paddingBottom = Math.max(8, Math.round(h - 76)) + 'px';
+  }
+  if ('ResizeObserver' in window) new ResizeObserver(padDestList).observe($('cards'));
   // 위쪽 설정 접기·펼치기: 막대를 위로 밀면 요약 한 줄 + 넓은 도착지 목록
   const routePane = document.querySelector('.pane-route');
   function setCompact(on) {
@@ -1716,7 +1805,7 @@
   $('cards').addEventListener('click', (e) => {
     if (e.target.closest('#more-far')) { const top = $('cards').scrollTop; showFar = true; renderRoute(); $('cards').scrollTop = top; return; }
     const c = e.target.closest('.dest');
-    if (c) selectDest(c.dataset.code);
+    if (c) selectDest(c.dataset.code, 'tap');
   });
   $('mode-real').addEventListener('click', () => { sel.mode = 'real'; renderRouteSummary(); });
   $('mode-mine').addEventListener('click', () => { sel.mode = 'mine'; renderRouteSummary(); });
@@ -2399,7 +2488,7 @@
     $('m-remain').textContent = clock;
     $('f-remain-label').textContent = paused ? '일시정지 중' : 'Time remaining';
     $('f-dist').textContent = fmtNum(f.km - flown) + ' km';
-    $('m-dist').textContent = `${fmtNum(f.km - flown)} km 남음`;
+    $('m-dist').textContent = `${fmtNum(f.km - flown)} km 남음 · ${paused ? '일시정지' : fmtHM(f.endAt) + ' 도착'}`;
     $('m-phase').textContent = paused ? '일시정지' : `${PHASES[idx].en} · ${PHASES[idx].ko}`;
     $('f-bar').style.width = (p * 100).toFixed(2) + '%';
     $('m-bar').style.width = (p * 100).toFixed(2) + '%';

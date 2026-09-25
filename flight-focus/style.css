@@ -112,7 +112,14 @@ body[data-step="home"] .topbar { justify-content: space-between; }
 body[data-step="home"] .zoom { left: auto; right: 24px; bottom: calc(100px + env(safe-area-inset-bottom, 0px)); }
 body[data-step="flight"] .zoom { left: auto; right: 16px; bottom: auto; top: calc(84px + env(safe-area-inset-top, 0px)); }
 body[data-step="time"] .zoom, body[data-step="route"] .zoom, body[data-step="arrive"] .zoom { left: auto; right: 16px; bottom: auto; top: calc(20px + env(safe-area-inset-top, 0px)); }
-body[data-step="pass"] .zoom, body[data-step="log"] .zoom { opacity: 0; pointer-events: none; visibility: hidden; }
+/* 탑승권·로그북에서는 전체 화면 버튼만 오른쪽 위에 */
+body[data-step="pass"] .zoom, body[data-step="log"] .zoom { left: auto; right: 16px; bottom: auto; top: calc(20px + env(safe-area-inset-top, 0px)); }
+body[data-step="pass"] .zoom > :not(#btn-full), body[data-step="log"] .zoom > :not(#btn-full) { display: none; }
+/* 좁거나 낮은 화면: 버튼을 두 줄로 놓아 비행 창과 겹치지 않게 */
+@media (max-width: 639px), (max-height: 600px) {
+  .zoom { grid-template-columns: repeat(2, auto); direction: rtl; }
+  .zoom > * { direction: ltr; }
+}
 /* 비행기 따라가기: 따라가는 중이면 채운 화살표, 손으로 옮겼으면 빈 화살표 + 노란 테두리 */
 body:not([data-step="flight"]) #btn-follow { display: none; }
 #btn-follow svg { transition: fill 200ms var(--ease); }
@@ -122,6 +129,7 @@ body:not([data-step="flight"]) #btn-follow { display: none; }
   body[data-step="time"] .zoom, body[data-step="route"] .zoom, body[data-step="arrive"] .zoom { right: auto; left: 24px; top: auto; bottom: 24px; }
   body[data-step="home"] .zoom { bottom: 32px; }
   body[data-step="flight"] .zoom { top: auto; bottom: 24px; right: 24px; }
+  body[data-step="pass"] .zoom, body[data-step="log"] .zoom { top: 24px; bottom: auto; right: 24px; left: auto; }
 }
 
 /* ---------- 모양이 바뀌는 박스 ---------- */
@@ -239,6 +247,8 @@ button:active { transform: scale(0.97); }
 .wheel-list li.on { color: var(--ink); font-weight: 700; }
 .wheel-list li small { font-size: 12px; font-weight: 500; color: var(--muted); }
 .wheel-list li .locked { opacity: 0.55; }
+.end-at { text-align: center; font-size: 14px; color: var(--muted); margin-top: -6px; }
+.end-at b { color: var(--ink); }
 .best {
   display: flex; align-items: center; justify-content: space-between; gap: 10px;
   padding: 12px 14px; border-radius: 18px; background: var(--gray-2); font-size: 14px;
@@ -286,7 +296,7 @@ button:active { transform: scale(0.97); }
 .grabber:hover span, .grabber.dragging span { background: var(--ink); width: 60px; }
 
 /* 도착지: 한 줄에 하나씩, 시간 차이로 묶음 */
-.dest-list { flex: 1 1 auto; min-height: 140px; overflow-y: auto; display: grid; gap: 6px; align-content: start; margin-inline: -6px; padding: 2px 6px; }
+.dest-list { position: relative; flex: 1 1 auto; min-height: 140px; overflow-y: auto; display: grid; gap: 6px; align-content: start; margin-inline: -6px; padding: 2px 6px; }
 .dest-group { display: flex; justify-content: space-between; align-items: baseline; padding: 10px 4px 2px; font-size: 12px; font-weight: 700; color: var(--muted); letter-spacing: 0.02em; }
 .dest {
   display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 12px;
