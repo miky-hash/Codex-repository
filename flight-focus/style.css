@@ -302,6 +302,32 @@ button:active { transform: scale(0.97); }
 .dest-time b { font-size: 16px; }
 .dest-time small { font-size: 12px; color: var(--muted); }
 .dest-time small.exact { color: var(--ok); font-weight: 700; }
+/* 공항 검색창 (출발지 서랍 · 도착지 목록 위) */
+.search { position: relative; display: flex; align-items: center; flex: none; }
+.search > svg { position: absolute; left: 14px; width: 18px; height: 18px; color: var(--muted); pointer-events: none; }
+.search input {
+  width: 100%; border: 0; border-radius: 999px; background: var(--gray); padding: 11px 44px 11px 42px;
+  font-size: 16px; /* 16px 미만이면 아이폰·아이패드가 입력할 때 화면을 확대함 */
+  -webkit-appearance: none; appearance: none; transition: box-shadow 200ms var(--ease), background-color 200ms var(--ease);
+}
+.search input::-webkit-search-cancel-button { display: none; }
+.search input::placeholder { color: #9A9AA2; }
+.search input:focus { outline: none; background: var(--white); box-shadow: inset 0 0 0 2px var(--ink); }
+.search-x { position: absolute; right: 6px; width: 34px; height: 34px; border: 0; border-radius: 50%; background: transparent; color: var(--muted); display: grid; place-items: center; }
+.search-x svg { width: 18px; height: 18px; }
+.od .search { margin: 0 10px 8px; }
+.od .search input { background: var(--white); }
+#wd-dep.open { max-height: 440px; }
+.search-results { display: grid; gap: 4px; align-content: start; margin: 0 10px 10px; height: 308px; overflow-y: auto; overscroll-behavior: contain; }
+.sr { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 12px; align-items: center; width: 100%; border: 0; border-radius: 16px; background: var(--white); padding: 8px 12px; text-align: left; }
+.sr:hover, .sr:focus-visible { box-shadow: inset 0 0 0 2px var(--ink); }
+.sr .ychip { min-width: 72px; justify-content: center; }
+.sr-city { display: grid; min-width: 0; }
+.sr-city b, .sr-city small { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sr-city b { font-size: 15px; }
+.sr-city small { font-size: 12px; color: var(--muted); }
+.sr-empty, .dest-note { font-size: 13px; color: var(--muted); padding: 10px 6px; }
+.dest-note b { color: var(--ink); }
 .more-btn { border: 0; background: transparent; padding: 10px; font-weight: 700; color: var(--muted); border-radius: 12px; }
 
 /* ---------- 과목 시트 ---------- */

@@ -900,7 +900,8 @@
       scene.chips = [chip(depCode, 'here')];
     } else if (step === 'route') {
       const x = selected();
-      const cands = routes().slice(0, 16).filter((r) => !x || r.a.code !== x.a.code).map((r) => chip(r.a.code, 'cand'));
+      const pool = hasQuery($('dest-q')) ? searchRows : routes(); // 검색 중이면 검색 결과를 지구본에 표시
+      const cands = pool.slice(0, 16).filter((r) => !x || r.a.code !== x.a.code).map((r) => chip(r.a.code, 'cand'));
       scene.chips = (x ? [chip(x.a.code, 'sel')] : []).concat([chip(depCode, 'here')], cands);
       if (x) scene.line = { type: 'LineString', coordinates: [lonlat(AP[depCode]), lonlat(x.a)] };
     } else if (step === 'flight' && flight) {
@@ -1065,6 +1066,7 @@
     if (!$('map-menu').hidden) toggleMapMenu(false);
     zoomMul = 1;
     setFollowing(true);
+    if (next !== 'route' && $('dest-q').value) { $('dest-q').value = ''; $('dest-q-x').hidden = true; } // 경로 화면을 떠나면 도착지 검색어는 비움
     closeDrawers();
     const first = dock.getBoundingClientRect();
     const cs1 = getComputedStyle(dock);
@@ -1136,7 +1138,7 @@
     else if (step === 'log') go('home');
   }
   document.addEventListener('keydown', (e) => {
-    if (e.key !== 'Escape') return;
+    if (e.key !== 'Escape' || e.defaultPrevented) return;
     if (!$('airport-modal').hidden) closeAirportModal();
     else if (!$('subject-sheet').hidden) closeSheet();
     else back();
@@ -1320,6 +1322,8 @@
   // 펼쳐지는 휠 서랍 (한 번에 하나만 열림)
   let openDrawer = null;
   function closeDrawers() {
+    const dq = $('dep-q');
+    if (dq && dq.value) { dq.value = ''; renderDepResults(); }
     document.querySelectorAll('.wheel-drawer.open').forEach((d) => d.classList.remove('open'));
     document.querySelectorAll('[aria-controls^="wd-"]').forEach((b) => b.setAttribute('aria-expanded', 'false'));
     openDrawer = null;
@@ -1398,12 +1402,77 @@
     wheelDep.setItems(AIRPORTS.map((a) => ({ v: a.code, t: `<b>${a.code}</b> ${esc(a.city)} <small>${esc(a.country)}</small>` })), depCode);
   }
 
-  const wheelDep = makeWheel($('wheel-dep'), '출발 공항', (code) => {
+  const wheelDep = makeWheel($('wheel-dep'), '출발 공항', (code) => setDep(code));
+  function setDep(code) {
+    if (code === depCode) return;
     depCode = loc = code; store.set('loc', loc);
     pickBest(); selKey = depCode + ':' + prefs.minutes; showFar = false;
     renderRoute(); updateScene();
     flyTo(viewFor('route', dockRect()), 800);
+  }
+
+  // ---------- 공항 검색: 도시·영어 이름·코드·나라, 한글 초성(ㅇㅊ → 인천)도 됨 ----------
+  const CHO = 'ㄱㄲㄴㄷㄸㄹㅁㅂㅃㅅㅆㅇㅈㅉㅊㅋㅌㅍㅎ';
+  const chosung = (str) => [...str].map((ch) => {
+    const c = ch.charCodeAt(0) - 0xAC00;
+    return c >= 0 && c <= 11171 ? CHO[Math.floor(c / 588)] : ch;
+  }).join('');
+  const norm = (str) => String(str).toLowerCase().replace(/[\s·().,'-]/g, '');
+  const SEARCH = AIRPORTS.map((a) => ({
+    a, code: a.code.toLowerCase(), city: norm(a.city), text: norm(a.city + a.en + a.country + a.region),
+    cityCho: chosung(norm(a.city)), cho: chosung(norm(a.city + a.country)),
+  }));
+  // 점수가 낮을수록 먼저: 코드 일치 → 도시 이름이 그 글자로 시작 → 코드가 그 글자로 시작 → 어디든 포함
+  function searchAirports(q) {
+    const n = norm(q);
+    if (!n) return [];
+    const cho = /^[ㄱ-ㅎ]+$/.test(n);
+    const out = [];
+    for (const it of SEARCH) {
+      let score = -1;
+      if (cho) score = it.cityCho.startsWith(n) ? 1 : it.cho.includes(n) ? 3 : -1;
+      else if (it.code === n) score = 0;
+      else if (it.city.startsWith(n)) score = 1;
+      else if (it.code.startsWith(n)) score = 2;
+      else if (it.text.includes(n)) score = 3;
+      if (score >= 0) out.push({ a: it.a, score });
+    }
+    return out.sort((x, y) => x.score - y.score);
+  }
+  const hasQuery = (el) => !!norm(el.value);
+
+  // 출발지 검색: 글자를 넣으면 휠 대신 결과 목록, 누르면 그 공항으로 바꾸고 서랍을 닫음
+  function renderDepResults() {
+    const on = hasQuery($('dep-q'));
+    $('dep-q-x').hidden = !$('dep-q').value;
+    $('wheel-dep').hidden = on;
+    $('dep-results').hidden = !on;
+    if (!on) { wheelDep.set(depCode); return; }
+    const rs = searchAirports($('dep-q').value).slice(0, 12);
+    $('dep-results').innerHTML = rs.length ? rs.map(({ a }) => `<button type="button" class="sr" role="option" data-code="${a.code}">
+        <span class="ychip">${a.code}</span><span class="sr-city"><b>${esc(a.city)}</b><small>${esc(a.country)} · ${esc(a.en)}</small></span></button>`).join('')
+      : '<p class="sr-empty">찾는 공항이 없어요. 도시 이름, 공항 코드(예: NRT), 나라 이름이나 초성(예: ㅇㅊ)으로 찾아 보세요.</p>';
+  }
+  function pickDepFromSearch(code) {
+    setDep(code);
+    closeDrawers();
+    toast(`출발지를 ${AP[code].city}(${code})${euro(AP[code].city)} 바꿨어요.`);
+  }
+  $('dep-q').addEventListener('input', renderDepResults);
+  $('dep-q').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { const first = $('dep-results').querySelector('.sr'); if (first) pickDepFromSearch(first.dataset.code); }
+    if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); $('dep-q').value = ''; renderDepResults(); }
   });
+  $('dep-q-x').addEventListener('click', () => { $('dep-q').value = ''; renderDepResults(); $('dep-q').focus(); });
+  $('dep-results').addEventListener('click', (e) => { const b = e.target.closest('.sr'); if (b) pickDepFromSearch(b.dataset.code); });
+
+  // 도착지 검색: 목록을 검색 결과로 바꿔 보여 줌 (고르는 건 평소처럼 줄을 누름)
+  $('dest-q').addEventListener('input', () => { $('dest-q-x').hidden = !$('dest-q').value; renderRoute(); updateScene(); $('cards').scrollTop = 0; });
+  $('dest-q').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { const first = $('cards').querySelector('.dest'); if (first) { selectDest(first.dataset.code); $('dest-q').blur(); } }
+    if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); $('dest-q').value = ''; $('dest-q-x').hidden = true; renderRoute(); updateScene(); }
+  });
+  $('dest-q-x').addEventListener('click', () => { $('dest-q').value = ''; $('dest-q-x').hidden = true; renderRoute(); updateScene(); $('dest-q').focus(); });
   const wheelAc = makeWheel($('wheel-ac'), '기종', (id) => {
     const ac = ACMAP[id];
     if (ac.miles > totalMiles()) { // 잠긴 기종에서 멈추면 원래 기종으로 되돌림
@@ -1430,7 +1499,7 @@
   $('ac-btn').addEventListener('click', () => toggleDrawer('wd-ac', $('ac-btn'), wheelAc, () => prefs.aircraft));
 
   // 도착지: 한 줄에 하나씩, 정한 시간과의 차이로 묶어서 보여 줌
-  let showFar = false, lastCards = '';
+  let showFar = false, lastCards = '', lastCardsSearch = false, searchRows = [];
   function destRow(x) {
     const exact = Math.abs(x.diff) <= 5;
     const diff = exact ? '딱 맞아요' : `${x.diff > 0 ? '+' : '−'}${fmtDur(Math.abs(x.diff))}`;
@@ -1455,15 +1524,33 @@
     if (far.some((x) => x.a.code === sel.to)) showFar = true;
     const group = (title, list) => (list.length
       ? `<div class="dest-group"><span>${title}</span><span>${list.length}곳</span></div>${list.map(destRow).join('')}` : '');
-    let html = group('딱 맞는 항공편 · ±10분', near1) + group('조금 차이 나는 항공편 · ±45분', near2);
-    if (far.length) {
-      html += showFar ? group('그 밖의 항공편', far)
-        : `<button type="button" class="more-btn" id="more-far">그 밖의 항공편 ${far.length}곳 더 보기</button>`;
+    const searching = hasQuery($('dest-q'));
+    let html;
+    if (searching) {
+      // 검색 결과: 이름이 잘 맞는 순서, 같으면 정한 시간에 가까운 순서
+      const byCode = new Map(rs.map((x) => [x.a.code, x]));
+      const found = searchAirports($('dest-q').value);
+      const rows = found.filter((f) => byCode.has(f.a.code))
+        .sort((p, q) => p.score - q.score || Math.abs(byCode.get(p.a.code).diff) - Math.abs(byCode.get(q.a.code).diff))
+        .map((f) => byCode.get(f.a.code));
+      const blocked = found.filter((f) => !byCode.has(f.a.code)).slice(0, 3).map(({ a }) => (a.code === depCode
+        ? `<p class="dest-note"><b>${esc(a.city)}(${a.code})</b> · 지금 출발지예요.</p>`
+        : `<p class="dest-note"><b>${esc(a.city)}(${a.code})</b> · 출발지에서 ${fmtKm(distanceKm(AP[depCode], a))}밖에 안 돼서 고를 수 없어요.</p>`)).join('');
+      searchRows = rows;
+      html = rows.length ? group('검색 결과', rows) + blocked
+        : blocked || '<p class="sr-empty">찾는 도착지가 없어요. 도시 이름, 공항 코드(예: NRT), 나라 이름이나 초성(예: ㄷㅋ)으로 찾아 보세요.</p>';
+    } else {
+      html = group('딱 맞는 항공편 · ±10분', near1) + group('조금 차이 나는 항공편 · ±45분', near2);
+      if (far.length) {
+        html += showFar ? group('그 밖의 항공편', far)
+          : `<button type="button" class="more-btn" id="more-far">그 밖의 항공편 ${far.length}곳 더 보기</button>`;
+      }
     }
     if (html !== lastCards) {
-      lastCards = html;
+      const modeChanged = searching !== lastCardsSearch;
+      lastCards = html; lastCardsSearch = searching;
       $('cards').innerHTML = html;
-      if (!REDUCED) $('cards').animate([{ opacity: 0.2, transform: 'translateY(8px)' }, { opacity: 1, transform: 'none' }], { duration: 280, easing: 'cubic-bezier(.2,.8,.2,1)' });
+      if (!REDUCED && (!searching || modeChanged)) $('cards').animate([{ opacity: 0.2, transform: 'translateY(8px)' }, { opacity: 1, transform: 'none' }], { duration: 280, easing: 'cubic-bezier(.2,.8,.2,1)' });
     }
     renderRouteSummary();
   }

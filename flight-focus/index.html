@@ -109,7 +109,11 @@
         <span class="od-field"><span class="od-label">출발지</span><b id="dep-name">ICN · 인천</b></span>
         <span class="caret" aria-hidden="true"></span>
       </button>
-      <div class="wheel-drawer" id="wd-dep"><div class="wheel" id="wheel-dep"></div></div>
+      <div class="wheel-drawer" id="wd-dep">
+        <div class="search"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5" fill="none" stroke="currentColor" stroke-width="2.2"/><path d="M15.5 15.5 20.5 20.5" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/></svg><input id="dep-q" type="search" placeholder="출발 공항 검색 (도시·코드·나라)" autocomplete="off" enterkeyhint="search" aria-label="출발 공항 검색" aria-controls="dep-results"><button type="button" class="search-x" id="dep-q-x" aria-label="검색어 지우기" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7l10 10M17 7 7 17" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg></button></div>
+        <div class="search-results" id="dep-results" role="listbox" aria-label="출발 공항 검색 결과" hidden></div>
+        <div class="wheel" id="wheel-dep"></div>
+      </div>
       <div class="od-row">
         <span class="od-dot">B</span>
         <span class="od-field"><span class="od-label">도착지</span><b id="dest-name">-</b></span>
@@ -128,6 +132,7 @@
     <p class="hint" id="route-note"></p>
     </div>
     <button type="button" class="grabber" id="grabber" aria-expanded="true" aria-controls="route-top" aria-label="위쪽 설정 접기·펼치기 (위로 밀면 도착지 목록이 넓어져요)"><span></span></button>
+    <div class="search dest-search"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5" fill="none" stroke="currentColor" stroke-width="2.2"/><path d="M15.5 15.5 20.5 20.5" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/></svg><input id="dest-q" type="search" placeholder="도착지 검색 (도시·코드·나라)" autocomplete="off" enterkeyhint="search" aria-label="도착지 검색" aria-controls="cards"><button type="button" class="search-x" id="dest-q-x" aria-label="검색어 지우기" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7l10 10M17 7 7 17" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg></button></div>
     <div class="dest-list" id="cards" role="listbox" aria-label="도착지 후보"></div>
     <button type="button" class="btn-black" id="btn-go">GO!</button>
   </div>
