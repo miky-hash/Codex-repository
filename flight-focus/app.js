@@ -117,10 +117,10 @@
     const key = f.seed + ':' + f.minutes + ':' + f.km;
     if (profileCache.has(key)) return profileCache.get(key);
     const T = f.minutes;
-    // 느린 단계는 시간 고정: 탑승구 2분, 이륙 4분, 하강 4분, 착륙 2분. 나머지는 모두 순항
+    // 느린 단계: 탑승구 2분, 이륙 4분, 하강 4분, 착륙 2분 (합계 12분). 나머지는 모두 순항
     let g = 2 / T, c = 4 / T, d = 4 / T, l = 2 / T;
     const slow = g + c + d + l;
-    if (slow > 0.8) { const k = 0.8 / slow; g *= k; c *= k; d *= k; l *= k; } // 15분보다 짧은 비행만: 순항이 20%는 남게 줄임
+    if (slow > 0.2) { const k = 0.2 / slow; g *= k; c *= k; d *= k; l *= k; } // 60분보다 짧은 비행은 같은 비율로 줄여서 순항이 80%는 되게
     const b = [g, g + c, 1 - d - l, 1 - l];
     const r = rng(f.seed);
     const ph = [r() * 6.283, r() * 6.283, r() * 6.283, r() * 6.283];
@@ -556,6 +556,7 @@
     ctx.closePath();
     ctx.restore();
   }
+  const unitVec = (lon, lat) => { const a = toRad(lon), b = toRad(lat), cb = Math.cos(b); return [cb * Math.cos(a), cb * Math.sin(a), Math.sin(b)]; };
   // 지구 앞면에 보이는 점이면 화면 좌표, 뒤쪽이면 null
   function projectVisible(ll) {
     if (tilesOn()) {
@@ -797,17 +798,28 @@
   }
 
   // 공항 칩: 고른 공항(sel)·출발 공항(here)은 노랑, 나머지는 흰색. 겹치면 덜 중요한 칩은 생략
+  const chipW = new Map(); // 코드별 칩 너비 (글자 폭 재기는 한 번만)
   function drawChips(now) {
-    const placed = [];
     const drawn = [];
     ctx.font = `700 13px ${FONT}`;
+    // 지구 앞면 판정: 화면 가운데 지점과의 각도가 보이는 범위(cap) 안인지, 삼각함수 없이 내적으로
+    const cap = tilesOn() ? mlCap - 0.01 : Math.PI / 2 - 0.02, minDot = Math.cos(cap);
+    const c0 = unitVec(view.lon, view.lat);
+    // 겹침 검사는 64px 격자 칸에 나눠 담아서, 가까운 칸의 칩과만 비교
+    const G = 64, grid = new Map();
+    const cells = (r, fn) => { for (let gx = Math.floor((r.x - 4) / G); gx <= Math.floor((r.x + r.w + 4) / G); gx++) for (let gy = Math.floor((r.y - 4) / G); gy <= Math.floor((r.y + r.h + 4) / G); gy++) fn(gx + ',' + gy); };
     for (const c of scene.chips) {
+      const v = c.v || (c.v = unitVec(c.at[0], c.at[1]));
+      if (v[0] * c0[0] + v[1] * c0[1] + v[2] * c0[2] < minDot) continue; // 지구 뒤편
       const p = frontPoint(c.at);
       if (!p) continue;
-      const w = ctx.measureText(c.code).width + 40, h = 30;
-      const rect = { x: p[0] - w / 2, y: p[1] - h / 2, w, h };
-      if (placed.some((q) => rect.x < q.x + q.w + 4 && q.x < rect.x + rect.w + 4 && rect.y < q.y + q.h + 4 && q.y < rect.y + rect.h + 4)) continue;
-      placed.push(rect);
+      let w = chipW.get(c.code);
+      if (w === undefined) { w = ctx.measureText(c.code).width + 40; chipW.set(c.code, w); }
+      const h = 30, rect = { x: p[0] - w / 2, y: p[1] - h / 2, w, h };
+      let hit = false;
+      cells(rect, (k) => { if (!hit) { const l = grid.get(k); if (l && l.some((q) => rect.x < q.x + q.w + 4 && q.x < rect.x + rect.w + 4 && rect.y < q.y + q.h + 4 && q.y < rect.y + rect.h + 4)) hit = true; } });
+      if (hit) continue;
+      cells(rect, (k) => { const l = grid.get(k); if (l) l.push(rect); else grid.set(k, [rect]); });
       drawn.push({ c, rect });
     }
     for (let i = drawn.length - 1; i >= 0; i--) {
@@ -1072,6 +1084,7 @@
 
   function go(next, instant, slow) {
     if (!$('map-menu').hidden) toggleMapMenu(false);
+    if (!$('home-search').hidden) { $('home-search').hidden = true; $('btn-search').setAttribute('aria-expanded', 'false'); }
     zoomMul = 1;
     setFollowing(true);
     if (next !== 'route' && $('dest-q').value) { $('dest-q').value = ''; $('dest-q-x').hidden = true; } // 경로 화면을 떠나면 도착지 검색어는 비움
@@ -1236,6 +1249,44 @@
     renderHomeLoc(true);
   }
   $('btn-journey').addEventListener('click', () => openAirportModal(homeSel));
+
+  // 처음 화면 공항 검색: 고르면 그 공항이 노랗게 되고 지구본이 그쪽으로 돌아감 (확인은 출발 버튼에서)
+  const HS_ANIM = { opacity: 0, transform: 'translateY(-10px)' };
+  function openHomeSearch() {
+    $('home-q').value = '';
+    renderHomeResults();
+    showEl('home-search', HS_ANIM);
+    $('btn-search').setAttribute('aria-expanded', 'true');
+    $('home-q').focus();
+  }
+  function closeHomeSearch() {
+    if ($('home-search').hidden) return;
+    hideEl('home-search', HS_ANIM);
+    $('btn-search').setAttribute('aria-expanded', 'false');
+  }
+  function renderHomeResults() {
+    const q = $('home-q').value;
+    if (!hasQuery($('home-q'))) {
+      $('home-results').innerHTML = `<p class="sr-empty">도시 이름(도쿄), 영어(tokyo), 공항 코드(NRT), 나라(일본), 초성(ㄷㅋ)으로 찾아요. 지금 ${AIRPORTS.length}곳이 있어요.</p>`;
+      return;
+    }
+    const rs = searchAirports(q).slice(0, 30);
+    $('home-results').innerHTML = rs.length ? rs.map(({ a }) => `<button type="button" class="sr" role="option" data-code="${a.code}" aria-selected="${a.code === homeSel}">
+        <span class="ychip">${a.code}</span><span class="sr-city"><b>${esc(a.city)}</b><small>${esc(a.country)} · ${esc(a.en)}${a.code === loc ? ' · 현재 위치' : ` · 여기서 ${fmtKm(distanceKm(AP[loc], a))}`}</small></span></button>`).join('')
+      : '<p class="sr-empty">찾는 공항이 없어요. 도시 이름, 공항 코드(예: NRT), 나라 이름이나 초성(예: ㅇㅊ)으로 찾아 보세요.</p>';
+  }
+  function pickHomeFromSearch(code) { closeHomeSearch(); selectHome(code); }
+  $('btn-search').addEventListener('click', () => ($('home-search').hidden ? openHomeSearch() : closeHomeSearch()));
+  $('home-q').addEventListener('input', renderHomeResults);
+  $('home-q').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { const first = $('home-results').querySelector('.sr'); if (first) pickHomeFromSearch(first.dataset.code); }
+    if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeHomeSearch(); }
+  });
+  $('home-q-x').addEventListener('click', closeHomeSearch);
+  $('home-results').addEventListener('click', (e) => { const b = e.target.closest('.sr'); if (b) pickHomeFromSearch(b.dataset.code); });
+  document.addEventListener('pointerdown', (e) => { // 바깥을 누르면 닫힘
+    if (!$('home-search').hidden && !e.target.closest('#home-search') && !e.target.closest('#btn-search')) closeHomeSearch();
+  });
   $('btn-log').addEventListener('click', () => go('log'));
 
   // 전체 화면 + (휴대폰이면) 가로 고정. 안 되는 환경이면 안내만 함
@@ -1287,14 +1338,20 @@
     const list = el.querySelector('.wheel-list');
     const w = { items: [], idx: 0 };
     let lis = [];
-    const rowH = () => (lis[0] && lis[0].offsetHeight) || 44;
+    const rowH = () => 44; // 칸 높이는 CSS에서 44px로 고정 (재면 수백 칸 목록의 배치를 매번 다시 계산해서 느려짐)
+    // 보이는 칸(가운데 ±6칸)만 다시 계산: 항목이 수백 개여도 굴릴 때 가벼움
+    let painted = [];
     function paint() {
       const c = list.scrollTop / rowH();
-      lis.forEach((li, i) => {
-        const d = i - c, ad = Math.min(Math.abs(d), 3);
+      const lo = Math.max(0, Math.floor(c) - 6), hi = Math.min(lis.length - 1, Math.ceil(c) + 6);
+      painted.forEach((i) => { if ((i < lo || i > hi) && lis[i]) lis[i].classList.remove('on'); });
+      painted = [];
+      for (let i = lo; i <= hi; i++) {
+        const li = lis[i], d = i - c, ad = Math.min(Math.abs(d), 3);
         li.style.transform = `perspective(500px) rotateX(${(-d * 20).toFixed(1)}deg) scale(${(1 - ad * 0.07).toFixed(3)})`;
         li.classList.toggle('on', Math.abs(d) < 0.5);
-      });
+        painted.push(i);
+      }
     }
     const scrollToIdx = (i, smooth) => list.scrollTo({ top: i * rowH(), behavior: smooth && !REDUCED ? 'smooth' : 'auto' });
     function mark(i) {
@@ -1318,6 +1375,7 @@
       w.items = items;
       list.innerHTML = items.map((it, i) => `<li role="option" id="${el.id}-o${i}" data-i="${i}">${it.t}</li>`).join('');
       lis = [...list.children];
+      painted = [];
       w.set(value);
     };
     w.set = (value) => {
@@ -1332,7 +1390,11 @@
   function closeDrawers() {
     const dq = $('dep-q');
     if (dq && dq.value) { dq.value = ''; renderDepResults(); }
-    document.querySelectorAll('.wheel-drawer.open').forEach((d) => d.classList.remove('open'));
+    document.querySelectorAll('.wheel-drawer.open').forEach((d) => {
+      d.classList.remove('open');
+      // 접히는 움직임이 끝나면 안쪽 목록(공항 1,000칸 등)은 배치 계산을 건너뛰게 재움
+      setTimeout(() => { if (!d.classList.contains('open')) d.classList.add('asleep'); }, 450);
+    });
     document.querySelectorAll('[aria-controls^="wd-"]').forEach((b) => b.setAttribute('aria-expanded', 'false'));
     openDrawer = null;
   }
@@ -1340,6 +1402,7 @@
     const willOpen = openDrawer !== id;
     closeDrawers();
     if (!willOpen) return;
+    $(id).classList.remove('asleep');
     $(id).classList.add('open');
     btn.setAttribute('aria-expanded', 'true');
     openDrawer = id;
@@ -1386,15 +1449,25 @@
   $('btn-to-route').addEventListener('click', () => { if (prefs.minutes > 0) go('route'); });
 
   // ---------- 2. 출발지 / 도착지 ----------
+  // 출발지에서 모든 공항까지 거리는 출발지가 바뀔 때만 계산하고, 정렬 결과는 출발지·시간이 같으면 다시 씀
+  let legsDep = '', legs = [], routesKey = '', routesCache = [];
   function routes() {
-    const d = AP[depCode];
-    return AIRPORTS
-      .filter((a) => a.code !== depCode)
-      .map((a) => { const km = distanceKm(d, a); return { a, km, min: realMinutes(km) }; })
-      .filter((x) => x.km >= 60) // 인천–김포처럼 너무 가까운 구간은 제외
-      .map((x) => Object.assign(x, { diff: x.min - prefs.minutes }))
-      .sort((x, y) => Math.abs(x.diff) - Math.abs(y.diff) || x.km - y.km);
+    if (legsDep !== depCode) {
+      const d = AP[depCode];
+      legs = AIRPORTS.filter((a) => a.code !== depCode)
+        .map((a) => { const km = distanceKm(d, a); return { a, km, min: realMinutes(km) }; })
+        .filter((x) => x.km >= 60); // 인천–김포처럼 너무 가까운 구간은 제외
+      legsDep = depCode; routesKey = '';
+    }
+    const key = depCode + ':' + prefs.minutes;
+    if (key !== routesKey) {
+      routesCache = legs.map((x) => Object.assign({}, x, { diff: x.min - prefs.minutes }))
+        .sort((x, y) => Math.abs(x.diff) - Math.abs(y.diff) || x.km - y.km);
+      routesKey = key;
+    }
+    return routesCache;
   }
+  const SUGGEST_MAX_DIFF = 180; // 정한 시간과 3시간 넘게 차이 나는 곳은 목록에 제안하지 않음 (검색하면 찾을 수 있음)
   const selected = () => (sel.to ? routes().find((x) => x.a.code === sel.to) || null : null);
   function pickBest() {
     const rs = routes();
@@ -1455,7 +1528,7 @@
     $('dep-q-x').hidden = !$('dep-q').value;
     $('wheel-dep').hidden = on;
     $('dep-results').hidden = !on;
-    if (!on) { wheelDep.set(depCode); return; }
+    if (!on) { if (openDrawer === 'wd-dep') wheelDep.set(depCode); return; }
     const rs = searchAirports($('dep-q').value).slice(0, 12);
     $('dep-results').innerHTML = rs.length ? rs.map(({ a }) => `<button type="button" class="sr" role="option" data-code="${a.code}">
         <span class="ychip">${a.code}</span><span class="sr-city"><b>${esc(a.city)}</b><small>${esc(a.country)} · ${esc(a.en)}</small></span></button>`).join('')
@@ -1521,15 +1594,20 @@
     const key = depCode + ':' + prefs.minutes;
     if (key !== selKey || !selected()) { pickBest(); selKey = key; showFar = false; }
     setText('dep-name', `${depCode} · ${AP[depCode].city}`);
-    wheelDep.set(depCode);
+    if (openDrawer === 'wd-dep') wheelDep.set(depCode); // 닫혀 있으면 열 때 맞춤 (닫힌 목록까지 배치 계산하지 않게)
     setText('btn-change-time', fmtHHMM(prefs.minutes));
     fillAircraft();
     const rs = routes();
     const near1 = rs.filter((x) => Math.abs(x.diff) <= 10);
     const near2 = rs.filter((x) => Math.abs(x.diff) > 10 && Math.abs(x.diff) <= 45);
-    const far = rs.filter((x) => Math.abs(x.diff) > 45);
+    const far = rs.filter((x) => Math.abs(x.diff) > 45 && Math.abs(x.diff) <= SUGGEST_MAX_DIFF);
+    const beyond = rs.length - near1.length - near2.length - far.length; // 3시간 넘게 차이 나서 제안하지 않는 곳
+    const noneWithin = !near1.length && !near2.length && !far.length; // 3시간 안에 맞는 곳이 하나도 없음
     if (!near1.length && !near2.length) showFar = true;
     if (far.some((x) => x.a.code === sel.to)) showFar = true;
+    // 검색으로 3시간 넘게 차이 나는 곳을 골랐으면 목록에도 그 한 곳은 보이게
+    const picked = rs.find((x) => x.a.code === sel.to);
+    if (!noneWithin && picked && Math.abs(picked.diff) > SUGGEST_MAX_DIFF && !far.includes(picked)) { far.push(picked); showFar = true; }
     const group = (title, list) => (list.length
       ? `<div class="dest-group"><span>${title}</span><span>${list.length}곳</span></div>${list.map(destRow).join('')}` : '');
     const searching = hasQuery($('dest-q'));
@@ -1550,8 +1628,16 @@
     } else {
       html = group('딱 맞는 항공편 · ±10분', near1) + group('조금 차이 나는 항공편 · ±45분', near2);
       if (far.length) {
-        html += showFar ? group('그 밖의 항공편', far)
-          : `<button type="button" class="more-btn" id="more-far">그 밖의 항공편 ${far.length}곳 더 보기</button>`;
+        html += showFar ? group('그 밖의 항공편 · ±3시간', far)
+          : `<button type="button" class="more-btn" id="more-far">그 밖의 항공편 ${far.length}곳 더 보기 (±3시간)</button>`;
+      }
+      if (noneWithin && rs.length) {
+        // 3시간 안에 맞는 곳이 하나도 없으면 시간이 가장 가까운 몇 곳만 보여 줌 (검색으로 고른 곳이 있으면 그것도)
+        const few = rs.slice(0, 3);
+        if (picked && !few.includes(picked)) few.push(picked);
+        html = `<p class="dest-note">정한 시간과 3시간 안으로 맞는 항공편이 없어요. 시간이 가장 가까운 곳을 보여 드려요. 다른 곳은 위 검색창으로 찾을 수 있어요.</p>` + group('시간이 가장 가까운 항공편', few);
+      } else if (beyond > 0 && (showFar || !far.length)) {
+        html += `<p class="dest-note">시간이 3시간 넘게 차이 나는 ${fmtNum(beyond)}곳은 목록에서 뺐어요. 위 검색창으로 찾을 수 있어요.</p>`;
       }
     }
     if (html !== lastCards) {
@@ -2089,10 +2175,11 @@
   function duck(on) { // 방송하는 동안 엔진 소음을 낮춤
     if (noiseGain && actx) noiseGain.gain.setTargetAtTime(on ? 0.12 : (cabinBuf ? 0.7 : 0.4), actx.currentTime, 0.4);
   }
-  function speak(ann) {
-    if (!HAS_VOICE || !prefs.voice || !ann) return;
+  // 방송 음성을 읽음. 읽기 시작했으면 true, 끝나면 onDone
+  let paToken = 0;
+  function speak(ann, onDone) {
+    if (!HAS_VOICE || !prefs.voice || !ann) return false;
     try {
-      speechSynthesis.cancel();
       const captain = ann.role === 'captain';
       const make = (text, lang, voice) => {
         const u = new SpeechSynthesisUtterance(text);
@@ -2107,11 +2194,48 @@
       const voice = pickVoice('en', captain ? /Guy|Daniel|Arthur|male|UK/i : /Jenny|Aria|Samantha|Libby|female|US/i);
       const parts = ann.en.split(/(?<=[.!?])\s+/).filter(Boolean);
       const us = parts.map((t) => make(t, voice && voice.lang ? voice.lang : 'en-US', voice));
-      if (!us.length) return;
+      if (!us.length) return false;
       us[0].onstart = () => duck(true);
-      us[us.length - 1].onend = () => duck(false);
-      setTimeout(() => us.forEach((u) => speechSynthesis.speak(u)), 1700); // 차임이 끝난 뒤
-    } catch (e) { /* 음성 없음 */ }
+      const last = us[us.length - 1];
+      last.onend = () => onDone && onDone();
+      last.onerror = () => onDone && onDone();
+      const token = paToken;
+      setTimeout(() => { if (token === paToken) us.forEach((u) => speechSynthesis.speak(u)); }, 1700); // 차임이 끝난 뒤
+      return true;
+    } catch (e) { return false; }
+  }
+
+  // 방송 순서 기다리기: 앞 방송(차임 + 음성)이 끝나야 다음 방송을 시작함 (짧은 비행에서 방송이 끊기지 않게)
+  const paQueue = [];
+  let paBusy = false, paTimer = 0;
+  function announce(ann) {
+    if (!ann) return;
+    paQueue.push(ann);
+    if (!paBusy) nextPA();
+  }
+  function nextPA() {
+    clearTimeout(paTimer);
+    const ann = paQueue.shift();
+    if (!ann) { paBusy = false; return; }
+    paBusy = true;
+    setPA(ann, Date.now()); // 화면 문구도 그 방송이 나올 때 바뀜
+    chime();
+    let done = false;
+    const token = paToken; // 취소(clearPA)된 뒤에 늦게 오는 끝 신호는 무시
+    const finish = () => {
+      if (done || token !== paToken) return;
+      done = true; duck(false);
+      paTimer = setTimeout(nextPA, 700); // 방송 사이 잠깐 쉼
+    };
+    if (!speak(ann, finish)) { paTimer = setTimeout(finish, 2600); return; } // 음성이 꺼져 있으면 차임 길이만큼만 기다림
+    // 끝 신호가 오지 않는 브라우저 대비: 글자 수로 길이를 어림해서 그 뒤에는 넘어감
+    paTimer = setTimeout(finish, 1700 + ann.en.length * 90 + 4000);
+  }
+  function clearPA() { // 일시정지·음성 끄기·회항: 남은 방송을 모두 취소
+    paQueue.length = 0; paBusy = false; paToken++;
+    clearTimeout(paTimer);
+    if (HAS_VOICE) { try { speechSynthesis.cancel(); } catch (e) { /* 무시 */ } }
+    duck(false);
   }
   if (!HAS_VOICE) $('btn-voice').hidden = true;
 
@@ -2334,9 +2458,7 @@
       f.phase = idx;
       store.set('flight', f);
       const ann = announcement(f, idx, p);
-      setPA(ann, now);
-      chime();
-      speak(ann);
+      announce(ann); // 앞 방송이 끝난 뒤에 차례로
       if (!first) alertUser(`${PHASES[idx].en} · ${PHASES[idx].ko}`, phaseMsg(f, idx, p));
       if (step === 'flight') renderPhases(f, p);
     }
@@ -2374,7 +2496,7 @@
     const now = Date.now();
     if (on && !f.pausedAt) {
       f.pausedAt = now;
-      if (HAS_VOICE) speechSynthesis.cancel();
+      clearPA();
       if (noiseGain && actx) noiseGain.gain.setTargetAtTime(0, actx.currentTime, 0.3);
       toast('일시정지했어요. 남은 시간과 비행기가 그대로 멈춰 있어요.');
     } else if (!on && f.pausedAt) {
@@ -2490,8 +2612,8 @@
   $('btn-voice').addEventListener('click', () => {
     prefs.voice = !prefs.voice; savePrefs();
     $('btn-voice').setAttribute('aria-pressed', String(prefs.voice));
-    if (prefs.voice && flight && !flight.pausedAt) speak(announcement(flight, Math.max(0, flight.phase), progressOf(flight, Date.now())));
-    else if (HAS_VOICE) speechSynthesis.cancel();
+    clearPA();
+    if (prefs.voice && flight && !flight.pausedAt) announce(announcement(flight, Math.max(0, flight.phase), progressOf(flight, Date.now())));
   });
   $('btn-wake').addEventListener('click', () => {
     if (wakeWanted) { releaseWake(); return; }
@@ -2531,7 +2653,7 @@
     stopFlightLoop();
     stopNoise();
     releaseWake();
-    if (HAS_VOICE) speechSynthesis.cancel();
+    if (diverted) clearPA(); // 착륙이면 하던 방송을 끝까지 듣고 도착 방송이 이어짐
     document.title = BASE_TITLE; lastTitle = '';
 
     if (diverted && focusedMin < 1) {
@@ -2557,8 +2679,7 @@
     if (newAc) { prefs.aircraft = newAc.id; savePrefs(); }
     if (!diverted) {
       loc = depCode = f.to; store.set('loc', loc);
-      chime();
-      speak(announcement(f, 5, 1));
+      announce(announcement(f, 5, 1));
       if (document.hidden) sysNotify(`${AP[f.to].city} 도착! 착륙 성공 ✈`, `${f.subject} ${fmtDur(focusedMin)} 비행을 끝까지 마쳤어요. +${fmtNum(entry.miles)} mi`);
     }
     lastEntry = entry;

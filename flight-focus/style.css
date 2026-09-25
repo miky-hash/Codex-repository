@@ -222,6 +222,7 @@ button:active { transform: scale(0.97); }
 /* 룰렛(드럼) 휠: 스크롤해서 가운데 칸을 고름 */
 .wheel-drawer { max-height: 0; overflow: hidden; transition: max-height 380ms var(--ease), opacity 280ms var(--ease); opacity: 0; flex: none; }
 .wheel-drawer.open { max-height: 360px; opacity: 1; }
+.wheel-drawer.asleep { content-visibility: hidden; } /* 닫힌 서랍 안은 그리기·배치 계산을 건너뜀 */
 .wheel { position: relative; height: 308px; border-radius: 22px; background: var(--gray-2); overflow: hidden; outline-offset: -3px; }
 .wheel-band { position: absolute; left: 8px; right: 8px; top: 50%; height: 44px; transform: translateY(-50%); border-radius: 999px; background: var(--white); box-shadow: inset 0 0 0 2.5px var(--ink); pointer-events: none; }
 .wheel-list {
@@ -293,6 +294,7 @@ button:active { transform: scale(0.97); }
   box-shadow: inset 0 0 0 2.5px transparent; transition: box-shadow 160ms var(--ease), background 160ms;
 }
 .dest:hover { background: #E6E6EA; }
+.dest { content-visibility: auto; contain-intrinsic-size: auto 62px; } /* 화면 밖 줄은 건너뜀 (목록이 수백 줄이어도 가볍게) */
 .dest[aria-selected="true"] { background: var(--white); box-shadow: inset 0 0 0 2.5px var(--ink); }
 .dest .ychip { min-width: 76px; justify-content: center; }
 .dest-city { display: grid; min-width: 0; }
@@ -328,6 +330,14 @@ button:active { transform: scale(0.97); }
 .sr-city small { font-size: 12px; color: var(--muted); }
 .sr-empty, .dest-note { font-size: 13px; color: var(--muted); padding: 10px 6px; }
 .dest-note b { color: var(--ink); }
+/* 처음 화면 공항 검색 (위에서 내려오는 칸) */
+.home-search {
+  position: fixed; z-index: 25; top: calc(16px + env(safe-area-inset-top, 0px)); left: 16px; right: 16px; margin: 0 auto;
+  max-width: 520px; display: grid; gap: 8px; padding: 10px; border-radius: 26px; background: var(--white); box-shadow: var(--shadow);
+}
+.home-results { margin: 0; height: auto; max-height: min(420px, 55vh); }
+.home-results .sr { background: var(--gray-2); }
+.home-results .sr[aria-selected="true"] { box-shadow: inset 0 0 0 2px var(--ink); }
 .more-btn { border: 0; background: transparent; padding: 10px; font-weight: 700; color: var(--muted); border-radius: 12px; }
 
 /* ---------- 과목 시트 ---------- */
