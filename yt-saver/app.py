@@ -5,26 +5,32 @@ import yt_dlp
 HERE = os.path.dirname(os.path.abspath(__file__))
 
 
+def writable_dir(base):
+    """base/YouTube 를 만들고 실제로 써 본다. 권한을 나중에 끈 경우에도 폴더는 남아 있어서 확인이 필요하다."""
+    if not os.path.isdir(base):
+        return None
+    path = os.path.join(base, "YouTube")
+    try:
+        os.makedirs(path, exist_ok=True)
+        test = os.path.join(path, ".write_test")
+        open(test, "w").close()
+        os.remove(test)
+        return path
+    except OSError:
+        return None
+
+
 def pick_save_dir():
     """SD카드(Termux 전용 폴더) → 내장 Download → Termux 홈 순서로 고른다."""
     home = os.path.expanduser("~")
     sd = [os.path.join(home, "storage", "external-1"), os.path.join(home, "storage", "external")]
     sd += sorted(glob.glob("/storage/*-*/Android/data/com.termux/files"))
     for base in sd:
-        if os.path.isdir(base):
-            path = os.path.join(base, "YouTube")
-            try:
-                os.makedirs(path, exist_ok=True)
-                test = os.path.join(path, ".write_test")
-                open(test, "w").close()
-                os.remove(test)
-                return path, "sd", "SD카드"
-            except OSError:
-                pass
-    dl = os.path.join(home, "storage", "downloads")
-    if os.path.isdir(dl):
-        path = os.path.join(dl, "YouTube")
-        os.makedirs(path, exist_ok=True)
+        path = writable_dir(base)
+        if path:
+            return path, "sd", "SD카드"
+    path = writable_dir(os.path.join(home, "storage", "downloads"))
+    if path:
         return path, "internal", "내장 저장소"
     path = os.path.join(home, "YouTube")
     os.makedirs(path, exist_ok=True)
